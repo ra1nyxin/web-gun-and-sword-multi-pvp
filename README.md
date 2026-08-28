@@ -1,40 +1,41 @@
-# Gun & Sword Arena
+# 枪剑竞技场
 
-A browser multiplayer 2D arena game. Opening the page connects a player straight to the shared world.
+一个打开网页即进入同一战局的多人 2D 对战游戏。
 
-## Run
+## 本地运行
 
 ```bash
 ./scripts/npm install
 ./scripts/npm run dev
 ```
 
-Open `http://localhost:25653`. To let players on the LAN join, open `http://YOUR_LAN_IP:25653`.
+访问 `http://localhost:25653`。局域网玩家可访问 `http://你的局域网 IP:25653`。
 
-## Controls
+## 操作
 
-- `A` / `D` or arrow keys: move
-- `W` or up arrow: jump
-- Left click: use the selected item
-- Mouse wheel or `1`-`9`: select one of nine inventory slots
-- `Q`: drop the selected item
-- Walk over a world pickup to place it in the first empty slot
+- `A` / `D` 或方向键左右：移动
+- `W`、上方向键或空格：跳跃
+- 鼠标左键：使用当前物品
+- 鼠标滚轮或 `1`-`9`：切换九格物品栏
+- `Q`：丢弃当前物品
+- `T`：打开全局聊天；`Enter` 发送；`Esc` 取消
+- 靠近地图掉落物：自动放入第一个空栏位
 
-## Loadout
+## 战局内容
 
-Every player starts with a pistol, sword, and rifle. The arena periodically spawns scatterguns, plasma cannons, medkits, and more weapons. A selected medkit restores health once and is consumed. The server validates inventory changes, weapon cooldowns, damage, pickups, drops, and eliminations.
+每位玩家初始携带手枪、长剑和步枪。地图会持续刷新散弹枪、等离子炮、医疗包和其他武器。医疗包会恢复生命并消耗自身；所有背包、拾取、冷却、伤害、击杀和聊天消息都由服务端校验。
 
-## Production
+## 生产运行
 
 ```bash
 ./scripts/npm run build
 ./scripts/npm start
 ```
 
-The production server listens on port `25653` and serves both the game and Socket.IO connection.
+生产服务监听 `25653`，同时提供游戏页面和 Socket.IO 连接。
 
-## Architecture
+## 架构
 
-- The Canvas renderer draws the arena, fighters, weapons, and projectiles from code.
-- Matter.js runs on the Node.js server as the authoritative physics and collision simulation.
-- Socket.IO broadcasts snapshots at 20 Hz. There is no application-level player capacity limit.
+- Canvas 直接绘制竞技场、角色、武器、投射物和掉落物。
+- Matter.js 在 Node.js 服务端执行权威物理与碰撞。
+- Socket.IO 每秒广播 20 次战局快照；聊天走独立事件通道并保留最近消息。

@@ -1,7 +1,7 @@
 :root {
   color: #e9f2e7;
   background: #101820;
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: "Microsoft YaHei", "PingFang SC", Arial, Helvetica, sans-serif;
 }
 
 * {
@@ -145,7 +145,7 @@ button {
 }
 
 #player-count::before {
-  content: "P ";
+  content: "玩家 ";
   color: #d6ad60;
 }
 
@@ -290,6 +290,92 @@ button {
   transform: translateX(-50%);
 }
 
+#chat-panel {
+  position: fixed;
+  z-index: 5;
+  bottom: 88px;
+  left: 18px;
+  width: min(300px, calc(100vw - 36px));
+  border: 1px solid rgba(233, 242, 231, 0.35);
+  background: rgba(11, 18, 23, 0.78);
+  box-shadow: 3px 3px 0 rgba(0, 0, 0, 0.28);
+}
+
+#chat-open {
+  display: block;
+  width: 100%;
+  height: 27px;
+  padding: 0 8px;
+  border: 0;
+  border-bottom: 1px solid rgba(233, 242, 231, 0.18);
+  background: transparent;
+  color: #d6ad60;
+  font-size: 11px;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+}
+
+#chat-open:hover,
+#chat-open:focus-visible {
+  background: rgba(38, 50, 56, 0.88);
+  color: #e9f2e7;
+  outline: 0;
+}
+
+#chat-log {
+  max-height: 136px;
+  margin: 0;
+  padding: 3px 7px 5px;
+  overflow: hidden;
+  list-style: none;
+}
+
+#chat-log li {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 6px;
+  min-height: 20px;
+  align-items: baseline;
+  color: #dce8e2;
+  font-size: 11px;
+  line-height: 16px;
+}
+
+#chat-log strong {
+  color: #76c893;
+  font-weight: 700;
+}
+
+#chat-log span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+#chat-form {
+  padding: 6px;
+  border-top: 1px solid rgba(233, 242, 231, 0.2);
+}
+
+#chat-input {
+  display: block;
+  width: 100%;
+  height: 30px;
+  border: 1px solid #76c893;
+  border-radius: 2px;
+  outline: 0;
+  background: #101820;
+  color: #e9f2e7;
+  font: inherit;
+  font-size: 12px;
+  line-height: 28px;
+  padding: 0 8px;
+}
+
+#chat-input::placeholder {
+  color: #78909c;
+}
+
 #respawn {
   top: 50%;
   left: 50%;
@@ -341,5 +427,11 @@ button {
 
   .slot-name {
     font-size: 7px;
+  }
+
+  #chat-panel {
+    bottom: 76px;
+    left: 10px;
+    width: min(330px, calc(100vw - 20px));
   }
 }

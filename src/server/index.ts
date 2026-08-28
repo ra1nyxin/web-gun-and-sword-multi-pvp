@@ -6,6 +6,7 @@ import Matter from "matter-js";
 import { Server } from "socket.io";
 import {
   DEV_SOCKET_PORT,
+  ChatMessage,
   INVENTORY_SIZE,
   InputState,
   InventorySlot,
@@ -63,6 +64,7 @@ type Player = {
   slashUntil: number;
   swingHits: Set<string>;
   lastNoticeAt: number;
+  lastChatAt: number;
 };
 
 type Bullet = {
@@ -87,6 +89,7 @@ const players = new Map<string, Player>();
 const bullets = new Map<string, Bullet>();
 const pickups = new Map<string, Pickup>();
 const killFeed: KillEvent[] = [];
+const chatMessages: ChatMessage[] = [];
 const lootCycle: ItemId[] = ["scattergun", "plasma", "medkit", "rifle", "sword", "pistol"];
 
 let bulletSequence = 0;
@@ -95,6 +98,7 @@ let playerSequence = 0;
 let spawnSequence = 0;
 let lootSequence = 0;
 let killSequence = 0;
+let chatSequence = 0;
 
 const emptyInput = (): InputState => ({
   left: false,
@@ -135,6 +139,40 @@ function notice(player: Player, message: string, now: number) {
   if (now - player.lastNoticeAt < 450) return;
   player.lastNoticeAt = now;
   io.to(player.id).emit("notice", { message });
+}
+
+function sanitizeChat(candidate: unknown) {
+  if (typeof candidate !== "string") return null;
+  const normalized = candidate
+    .normalize("NFC")
+    .replace(/[\u0000-\u001f\u007f]/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
+  if (!normalized) return null;
+  return Array.from(normalized).slice(0, 120).join("");
+}
+
+function sendChat(player: Player, candidate: unknown, now: number) {
+  if (now - player.lastChatAt < 700) {
+    notice(player, "发送过快", now);
+    return;
+  }
+  const text = sanitizeChat(candidate);
+  if (!text) {
+    notice(player, "消息不能为空", now);
+    return;
+  }
+  player.lastChatAt = now;
+  chatSequence += 1;
+  const message: ChatMessage = {
+    id: `c${chatSequence}`,
+    sender: player.name,
+    text,
+    sentAt: now,
+  };
+  chatMessages.push(message);
+  chatMessages.splice(0, Math.max(0, chatMessages.length - 60));
+  io.emit("chat", message);
 }
 
 function normalizeAim(input: InputState) {
@@ -291,7 +329,7 @@ function useSelectedItem(player: Player, now: number) {
   if (player.dead) return;
   const item = activeItem(player);
   if (!item) {
-    notice(player, "EMPTY SLOT", now);
+    notice(player, "当前栏位为空", now);
     return;
   }
   const weapon = ITEMS[item];
@@ -306,14 +344,14 @@ function useSelectedItem(player: Player, now: number) {
   if (weapon.kind === "utility") {
     const restored = Math.min(weapon.heal ?? 0, WORLD.maxHealth - player.health);
     if (restored === 0) {
-      notice(player, "HEALTH FULL", now);
+      notice(player, "生命值已满", now);
       return;
     }
     player.cooldowns[item] = now;
     player.health += restored;
     player.inventory[player.selectedSlot] = null;
     syncInventory(player);
-    notice(player, `HEAL +${restored}`, now);
+    notice(player, `恢复生命 +${restored}`, now);
     return;
   }
   player.cooldowns[item] = now;
@@ -333,7 +371,7 @@ function dropSelectedItem(player: Player, now: number) {
   if (player.dead) return;
   const item = activeItem(player);
   if (!item) {
-    notice(player, "NOTHING TO DROP", now);
+    notice(player, "没有可丢弃的物品", now);
     return;
   }
   const aim = normalizeAim(player.input);
@@ -347,7 +385,7 @@ function dropSelectedItem(player: Player, now: number) {
     700,
   );
   syncInventory(player);
-  notice(player, `DROPPED ${ITEMS[item].label}`, now);
+  notice(player, `已丢弃 ${ITEMS[item].label}`, now);
 }
 
 function selectSlot(player: Player, slot: unknown) {
@@ -410,13 +448,13 @@ function resolvePickups(now: number) {
       if (Math.hypot(player.body.position.x - pickup.x, player.body.position.y - pickup.y) > 42) continue;
       const emptySlot = player.inventory.findIndex((slot) => slot === null);
       if (emptySlot === -1) {
-        notice(player, "PACK FULL", now);
+        notice(player, "背包已满", now);
         continue;
       }
       player.inventory[emptySlot] = pickup.item;
       removePickup(pickup.id);
       syncInventory(player);
-      notice(player, `PICKED ${ITEMS[pickup.item].label}`, now);
+      notice(player, `已拾取 ${ITEMS[pickup.item].label}`, now);
       break;
     }
   }
@@ -460,7 +498,7 @@ io.on("connection", (socket) => {
   playerSequence += 1;
   const player: Player = {
     id: socket.id,
-    name: `Fighter ${playerSequence}`,
+    name: `玩家 ${playerSequence}`,
     body: Bodies.rectangle(spawn.x, spawn.y, WORLD.playerWidth, WORLD.playerHeight, {
       friction: 0,
       frictionAir: 0.04,
@@ -480,10 +518,12 @@ io.on("connection", (socket) => {
     slashUntil: 0,
     swingHits: new Set(),
     lastNoticeAt: 0,
+    lastChatAt: 0,
   };
   players.set(socket.id, player);
   World.add(engine.world, player.body);
   socket.emit("welcome", { id: socket.id, inventory: inventoryState(player) });
+  socket.emit("chatHistory", chatMessages);
 
   socket.on("input", (candidate: Partial<InputState>) => {
     if (typeof candidate.left === "boolean") player.input.left = candidate.left;
@@ -497,6 +537,7 @@ io.on("connection", (socket) => {
   socket.on("selectSlot", (slot: unknown) => selectSlot(player, slot));
   socket.on("shoot", () => useSelectedItem(player, Date.now()));
   socket.on("slash", () => useLegacySword(player, Date.now()));
+  socket.on("chat", (message: unknown) => sendChat(player, message, Date.now()));
   socket.on("disconnect", () => {
     players.delete(socket.id);
     World.remove(engine.world, player.body);

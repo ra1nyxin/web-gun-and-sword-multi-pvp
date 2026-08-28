@@ -1,6 +1,6 @@
 import { io, Socket } from "socket.io-client";
 import { INVENTORY_SIZE, ITEMS, PLATFORMS, WORLD } from "../shared/game";
-import type { InventorySlot, InventoryState, PlayerState, Snapshot } from "../shared/game";
+import type { ChatMessage, InventorySlot, InventoryState, PlayerState, Snapshot } from "../shared/game";
 import "./style.css";
 
 type RenderPlayer = {
@@ -34,6 +34,11 @@ const killFeed = document.querySelector<HTMLOListElement>("#kill-feed")!;
 const leaderboard = document.querySelector<HTMLOListElement>("#leaderboard")!;
 const inventoryElement = document.querySelector<HTMLDivElement>("#inventory")!;
 const noticeElement = document.querySelector<HTMLDivElement>("#notice")!;
+const chatPanel = document.querySelector<HTMLElement>("#chat-panel")!;
+const chatOpenButton = document.querySelector<HTMLButtonElement>("#chat-open")!;
+const chatLog = document.querySelector<HTMLOListElement>("#chat-log")!;
+const chatForm = document.querySelector<HTMLFormElement>("#chat-form")!;
+const chatInput = document.querySelector<HTMLInputElement>("#chat-input")!;
 
 let myId = "";
 let latestSnapshot: Snapshot | null = null;
@@ -49,6 +54,8 @@ let lastInputAt = 0;
 let noticeTimeout = 0;
 let killFeedKey = "";
 let leaderboardKey = "";
+let chatActive = false;
+let chatMessages: ChatMessage[] = [];
 
 function applyInventory(next: InventoryState) {
   if (next.slots.length !== INVENTORY_SIZE) return;
@@ -63,6 +70,50 @@ function showNotice(message: string) {
   noticeTimeout = window.setTimeout(() => {
     noticeElement.hidden = true;
   }, 1_500);
+}
+
+function renderChat() {
+  chatLog.replaceChildren();
+  for (const message of chatMessages.slice(-6)) {
+    const row = document.createElement("li");
+    const sender = document.createElement("strong");
+    const text = document.createElement("span");
+    sender.textContent = message.sender;
+    text.textContent = message.text;
+    row.append(sender, text);
+    chatLog.append(row);
+  }
+}
+
+function receiveChat(message: ChatMessage) {
+  if (chatMessages.some((entry) => entry.id === message.id)) return;
+  chatMessages = [...chatMessages, message].slice(-60);
+  renderChat();
+}
+
+function openChat() {
+  if (chatActive || !myId) return;
+  chatActive = true;
+  keys.clear();
+  chatPanel.classList.add("is-composing");
+  chatForm.hidden = false;
+  chatInput.value = "";
+  chatInput.focus();
+}
+
+function closeChat() {
+  if (!chatActive) return;
+  chatActive = false;
+  chatPanel.classList.remove("is-composing");
+  chatForm.hidden = true;
+  chatInput.value = "";
+  chatInput.blur();
+}
+
+function sendChat() {
+  const text = chatInput.value.trim();
+  if (text) socket.emit("chat", text);
+  closeChat();
 }
 
 function createInventory() {
@@ -99,14 +150,14 @@ function renderInventory() {
       code.textContent = "--";
       name.textContent = "";
       button.style.removeProperty("--item-color");
-      button.title = `Slot ${index + 1}: empty`;
+      button.title = `栏位 ${index + 1}: 空`;
       continue;
     }
     const definition = ITEMS[item];
     code.textContent = definition.code;
     name.textContent = definition.label;
     button.style.setProperty("--item-color", definition.color);
-    button.title = `Slot ${index + 1}: ${definition.label}`;
+    button.title = `栏位 ${index + 1}: ${definition.label}`;
   }
 }
 
@@ -125,7 +176,7 @@ function updateKillFeed(snapshot: Snapshot) {
   for (const entry of snapshot.killFeed) {
     const row = document.createElement("li");
     const weapon = ITEMS[entry.item];
-    row.textContent = `${entry.attacker}  ${weapon.code}  ${entry.victim}`;
+    row.textContent = `${entry.attacker} 使用${weapon.label}击败 ${entry.victim}`;
     row.style.setProperty("--weapon-color", weapon.color);
     killFeed.append(row);
   }
@@ -141,8 +192,8 @@ function updateLeaderboard(snapshot: Snapshot) {
     const row = document.createElement("li");
     const name = document.createElement("span");
     const score = document.createElement("span");
-    name.textContent = player.id === myId ? "YOU" : player.name;
-    score.textContent = `${player.kills}-${player.deaths}`;
+    name.textContent = player.id === myId ? "你" : player.name;
+    score.textContent = `胜${player.kills} 负${player.deaths}`;
     row.append(name, score);
     leaderboard.append(row);
   }
@@ -155,13 +206,13 @@ function updateHud() {
   if (!mine) return;
   healthFill.style.width = `${mine.health}%`;
   healthValue.textContent = String(mine.health);
-  kills.textContent = `${mine.kills} K`;
-  deaths.textContent = `${mine.deaths} D`;
+  kills.textContent = `击败 ${mine.kills}`;
+  deaths.textContent = `倒下 ${mine.deaths}`;
   respawn.hidden = !mine.dead;
   const item = mine.activeItem;
   if (!item) {
     activeItemCode.textContent = "--";
-    activeItemName.textContent = "EMPTY";
+    activeItemName.textContent = "空栏";
     weaponReady.textContent = "";
     activeItemCode.style.removeProperty("--item-color");
     return;
@@ -170,17 +221,22 @@ function updateHud() {
   activeItemCode.textContent = weapon.code;
   activeItemName.textContent = weapon.label;
   activeItemCode.style.setProperty("--item-color", weapon.color);
-  weaponReady.textContent = mine.weaponReadyIn > 0 ? `${(mine.weaponReadyIn / 1000).toFixed(1)}S` : "READY";
+  weaponReady.textContent = mine.weaponReadyIn > 0 ? `${(mine.weaponReadyIn / 1000).toFixed(1)} 秒` : "就绪";
 }
 
 socket.on("welcome", ({ id, inventory: nextInventory }: { id: string; inventory: InventoryState }) => {
   myId = id;
   applyInventory(nextInventory);
-  connection.textContent = "ONLINE";
+  connection.textContent = "在线";
 });
 
 socket.on("inventory", (nextInventory: InventoryState) => applyInventory(nextInventory));
 socket.on("notice", ({ message }: { message: string }) => showNotice(message));
+socket.on("chatHistory", (history: ChatMessage[]) => {
+  chatMessages = history.slice(-60);
+  renderChat();
+});
+socket.on("chat", (message: ChatMessage) => receiveChat(message));
 socket.on("snapshot", (snapshot: Snapshot) => {
   latestSnapshot = snapshot;
   const activeIds = new Set<string>();
@@ -210,7 +266,8 @@ socket.on("snapshot", (snapshot: Snapshot) => {
 });
 
 socket.on("disconnect", () => {
-  connection.textContent = "RECONNECTING";
+  closeChat();
+  connection.textContent = "重连中";
 });
 
 function worldPointFromEvent(event: MouseEvent) {
@@ -220,14 +277,45 @@ function worldPointFromEvent(event: MouseEvent) {
 }
 
 window.addEventListener("keydown", (event) => {
+  if (chatActive) {
+    if (event.code === "Escape") {
+      event.preventDefault();
+      closeChat();
+    }
+    return;
+  }
+  if (event.code === "KeyT" && !event.repeat) {
+    event.preventDefault();
+    openChat();
+    return;
+  }
   keys.add(event.code);
   if (event.code === "KeyQ" && !event.repeat) socket.emit("drop");
   const slotMatch = event.code.match(/^(Digit|Numpad)([1-9])$/);
   if (slotMatch && !event.repeat) selectSlot(Number(slotMatch[2]) - 1);
   if (["ArrowUp", "ArrowLeft", "ArrowRight", "Space"].includes(event.code)) event.preventDefault();
 });
-window.addEventListener("keyup", (event) => keys.delete(event.code));
+window.addEventListener("keyup", (event) => {
+  if (!chatActive) keys.delete(event.code);
+});
 window.addEventListener("blur", () => keys.clear());
+chatForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  sendChat();
+});
+chatInput.addEventListener("keydown", (event) => {
+  event.stopPropagation();
+  if (event.code === "Escape") {
+    event.preventDefault();
+    closeChat();
+    return;
+  }
+  if (event.code === "Enter" && !event.isComposing) {
+    event.preventDefault();
+    sendChat();
+  }
+});
+chatOpenButton.addEventListener("click", openChat);
 canvas.addEventListener("contextmenu", (event) => event.preventDefault());
 canvas.addEventListener("mousedown", (event) => {
   worldPointFromEvent(event);
@@ -374,7 +462,7 @@ function drawPlayer(player: RenderPlayer, isLocal: boolean) {
   context.textAlign = "center";
   context.strokeStyle = "#0b1217";
   context.lineWidth = 3;
-  const name = isLocal ? "YOU" : state.name;
+  const name = isLocal ? "你" : state.name;
   context.strokeText(name, x, y - 49);
   context.fillText(name, x, y - 49);
 }

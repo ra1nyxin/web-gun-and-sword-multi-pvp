@@ -73,8 +73,8 @@ export type ItemDefinition = {
 
 export const ITEMS: Record<ItemId, ItemDefinition> = {
   sword: {
-    label: "SWORD",
-    code: "SW",
+    label: "长剑",
+    code: "剑",
     kind: "melee",
     color: "#ffd166",
     accent: "#fff2b3",
@@ -83,8 +83,8 @@ export const ITEMS: Record<ItemId, ItemDefinition> = {
     range: 90,
   },
   pistol: {
-    label: "PISTOL",
-    code: "PI",
+    label: "手枪",
+    code: "手",
     kind: "projectile",
     color: "#46c5d6",
     accent: "#d5fbff",
@@ -96,8 +96,8 @@ export const ITEMS: Record<ItemId, ItemDefinition> = {
     projectileLifetime: 1250,
   },
   rifle: {
-    label: "RIFLE",
-    code: "RF",
+    label: "步枪",
+    code: "步",
     kind: "projectile",
     color: "#b8e986",
     accent: "#efffd8",
@@ -109,8 +109,8 @@ export const ITEMS: Record<ItemId, ItemDefinition> = {
     projectileLifetime: 1050,
   },
   scattergun: {
-    label: "SCATTER",
-    code: "SG",
+    label: "散弹枪",
+    code: "散",
     kind: "projectile",
     color: "#ed8f57",
     accent: "#ffe1b8",
@@ -123,8 +123,8 @@ export const ITEMS: Record<ItemId, ItemDefinition> = {
     projectileLifetime: 680,
   },
   plasma: {
-    label: "PLASMA",
-    code: "PL",
+    label: "等离子炮",
+    code: "能",
     kind: "projectile",
     color: "#d971ef",
     accent: "#ffd7ff",
@@ -136,8 +136,8 @@ export const ITEMS: Record<ItemId, ItemDefinition> = {
     projectileLifetime: 1500,
   },
   medkit: {
-    label: "MEDKIT",
-    code: "+",
+    label: "医疗包",
+    code: "药",
     kind: "utility",
     color: "#76c893",
     accent: "#d7ffe3",
@@ -209,6 +209,13 @@ export type KillEvent = {
   attacker: string;
   victim: string;
   item: ItemId;
+};
+
+export type ChatMessage = {
+  id: string;
+  sender: string;
+  text: string;
+  sentAt: number;
 };
 
 export type Snapshot = {
