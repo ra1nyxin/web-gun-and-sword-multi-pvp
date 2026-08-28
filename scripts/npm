@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
+  exec npm "$@"
+fi
+
+local_node_bin="/opt/mcsmanager/node-v20.12.2-linux-x64/bin"
+if [ -x "$local_node_bin/node" ] && [ -x "$local_node_bin/npm" ]; then
+  export PATH="$local_node_bin:$PATH"
+  exec npm "$@"
+fi
+
+printf '%s\n' "Node.js 20 or later is required. Install it, then rerun this command." >&2
+exit 1

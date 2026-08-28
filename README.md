@@ -5,8 +5,8 @@ A browser multiplayer 2D arena game. Opening the page connects a player straight
 ## Run
 
 ```bash
-npm install
-npm run dev
+./scripts/npm install
+./scripts/npm run dev
 ```
 
 Open `http://localhost:25653`. To let players on the LAN join, open `http://YOUR_LAN_IP:25653`.
@@ -21,8 +21,8 @@ Open `http://localhost:25653`. To let players on the LAN join, open `http://YOUR
 ## Production
 
 ```bash
-npm run build
-npm start
+./scripts/npm run build
+./scripts/npm start
 ```
 
 The production server listens on port `25653` and serves both the game and Socket.IO connection.
