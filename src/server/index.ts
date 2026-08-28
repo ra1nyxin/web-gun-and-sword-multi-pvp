@@ -303,7 +303,7 @@ app.get("/health", (_request, response) => {
 if (isProduction) {
   const filename = fileURLToPath(import.meta.url);
   const dirname = path.dirname(filename);
-  const clientDirectory = path.resolve(dirname, "../client");
+  const clientDirectory = path.resolve(dirname, "../../client");
   app.use(express.static(clientDirectory));
   app.get("/{*splat}", (_request, response) => {
     response.sendFile(path.join(clientDirectory, "index.html"));
