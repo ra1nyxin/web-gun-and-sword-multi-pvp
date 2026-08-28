@@ -22,6 +22,7 @@ import {
   Snapshot,
   STARTING_INVENTORY,
   WORLD,
+  ZONES,
 } from "../shared/game.js";
 
 const { Bodies, Body, Engine, Query, World } = Matter;
@@ -287,7 +288,11 @@ function spawnPickup(
 
 function spawnWorldLoot(now: number) {
   if (pickups.size >= LOOT_SPAWNS.length) return;
-  const point = LOOT_SPAWNS[lootSequence % LOOT_SPAWNS.length];
+  const cycleIndex = lootSequence % LOOT_SPAWNS.length;
+  const zoneIndex = cycleIndex % ZONES.length;
+  const tier = Math.floor(cycleIndex / ZONES.length);
+  const lootPerZone = LOOT_SPAWNS.length / ZONES.length;
+  const point = LOOT_SPAWNS[zoneIndex * lootPerZone + tier];
   const item = lootCycle[lootSequence % lootCycle.length];
   lootSequence += 1;
   spawnPickup(item, point.x, point.y, now);
@@ -491,7 +496,7 @@ function snapshot(now: number): Snapshot {
   };
 }
 
-for (let index = 0; index < 5; index += 1) spawnWorldLoot(Date.now());
+for (let index = 0; index < Math.min(18, LOOT_SPAWNS.length); index += 1) spawnWorldLoot(Date.now());
 
 io.on("connection", (socket) => {
   const spawn = getSpawn();
@@ -556,7 +561,7 @@ setInterval(() => {
   resolvePickups(now);
 }, 1000 / 60);
 
-setInterval(() => spawnWorldLoot(Date.now()), 6_500);
+setInterval(() => spawnWorldLoot(Date.now()), 3_500);
 
 setInterval(() => {
   io.emit("snapshot", snapshot(Date.now()));

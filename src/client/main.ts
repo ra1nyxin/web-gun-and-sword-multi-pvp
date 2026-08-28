@@ -1,5 +1,5 @@
 import { io, Socket } from "socket.io-client";
-import { INVENTORY_SIZE, ITEMS, PLATFORMS, WORLD } from "../shared/game";
+import { INVENTORY_SIZE, ITEMS, PLATFORMS, WORLD, ZONES } from "../shared/game";
 import type { ChatMessage, InventorySlot, InventoryState, PlayerState, Snapshot } from "../shared/game";
 import "./style.css";
 
@@ -355,9 +355,20 @@ function clampCamera() {
 }
 
 function drawArena() {
-  context.fillStyle = "#17252f";
+  context.fillStyle = "#101820";
   context.fillRect(0, 0, WORLD.width, WORLD.height);
-  context.strokeStyle = "#213640";
+  for (const zone of ZONES) {
+    context.fillStyle = zone.color;
+    context.fillRect(zone.x, zone.y, zone.width, zone.height);
+    context.strokeStyle = zone.gridColor;
+    context.lineWidth = 2;
+    context.strokeRect(zone.x, zone.y, zone.width, zone.height);
+    context.fillStyle = "rgba(233, 242, 231, 0.18)";
+    context.font = "600 28px 'Microsoft YaHei', Arial, sans-serif";
+    context.textAlign = "left";
+    context.fillText(zone.name, zone.x + 34, 64);
+  }
+  context.strokeStyle = "rgba(233, 242, 231, 0.1)";
   context.lineWidth = 1;
   for (let x = 0; x <= WORLD.width; x += 80) {
     context.beginPath();
@@ -372,11 +383,12 @@ function drawArena() {
     context.stroke();
   }
   for (const platform of PLATFORMS) {
+    const zone = ZONES.find((entry) => platform.x >= entry.x && platform.x < entry.x + entry.width);
     const left = platform.x - platform.width / 2;
     const top = platform.y - platform.height / 2;
     context.fillStyle = "#283f3d";
     context.fillRect(left, top, platform.width, platform.height);
-    context.fillStyle = "#d6ad60";
+    context.fillStyle = zone?.accent ?? "#d6ad60";
     context.fillRect(left, top, platform.width, 5);
     context.strokeStyle = "#0b1217";
     context.lineWidth = 2;

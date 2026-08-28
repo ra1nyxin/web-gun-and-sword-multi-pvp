@@ -3,8 +3,8 @@ export const DEV_SOCKET_PORT = 25654;
 export const INVENTORY_SIZE = 9;
 
 export const WORLD = {
-  width: 1600,
-  height: 900,
+  width: 4800,
+  height: 1800,
   gravityY: 1.15,
   playerWidth: 32,
   playerHeight: 42,
@@ -20,34 +20,131 @@ export type PlatformDefinition = {
   height: number;
 };
 
+export type ZoneDefinition = {
+  name: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  color: string;
+  gridColor: string;
+  accent: string;
+};
+
+export const ZONES: ZoneDefinition[] = [
+  { name: "西岸平台", x: 0, y: 0, width: 800, height: WORLD.height, color: "#163039", gridColor: "#294b50", accent: "#d6ad60" },
+  { name: "熔炉阶梯", x: 800, y: 0, width: 800, height: WORLD.height, color: "#382b2a", gridColor: "#5c4540", accent: "#ed8f57" },
+  { name: "中枢长桥", x: 1600, y: 0, width: 800, height: WORLD.height, color: "#273348", gridColor: "#3d526c", accent: "#7bb6ff" },
+  { name: "苔原高地", x: 2400, y: 0, width: 800, height: WORLD.height, color: "#29392e", gridColor: "#45604d", accent: "#8fca85" },
+  { name: "东区货仓", x: 3200, y: 0, width: 800, height: WORLD.height, color: "#39312a", gridColor: "#5a4e40", accent: "#d6ad60" },
+  { name: "天际塔楼", x: 4000, y: 0, width: 800, height: WORLD.height, color: "#302d42", gridColor: "#4c4967", accent: "#d971ef" },
+];
+
 export const PLATFORMS: PlatformDefinition[] = [
-  { x: 800, y: 880, width: 1640, height: 48 },
-  { x: 12, y: 450, width: 24, height: 900 },
-  { x: 1588, y: 450, width: 24, height: 900 },
-  { x: 350, y: 770, width: 300, height: 30 },
-  { x: 1250, y: 770, width: 300, height: 30 },
-  { x: 800, y: 670, width: 300, height: 30 },
-  { x: 550, y: 575, width: 240, height: 30 },
-  { x: 1050, y: 575, width: 240, height: 30 },
-  { x: 800, y: 480, width: 240, height: 30 },
+  { x: 2400, y: 1780, width: 4840, height: 48 },
+  { x: 12, y: 900, width: 24, height: 1800 },
+  { x: 4788, y: 900, width: 24, height: 1800 },
+
+  { x: 220, y: 1670, width: 300, height: 30 },
+  { x: 620, y: 1670, width: 240, height: 30 },
+  { x: 430, y: 1570, width: 340, height: 30 },
+  { x: 150, y: 1470, width: 220, height: 30 },
+  { x: 700, y: 1470, width: 180, height: 30 },
+  { x: 430, y: 1370, width: 240, height: 30 },
+  { x: 210, y: 1270, width: 160, height: 30 },
+  { x: 650, y: 1270, width: 160, height: 30 },
+
+  { x: 970, y: 1670, width: 260, height: 30 },
+  { x: 1450, y: 1670, width: 260, height: 30 },
+  { x: 1220, y: 1570, width: 340, height: 30 },
+  { x: 940, y: 1470, width: 200, height: 30 },
+  { x: 1510, y: 1470, width: 180, height: 30 },
+  { x: 1230, y: 1370, width: 300, height: 30 },
+  { x: 1230, y: 1270, width: 160, height: 30 },
+
+  { x: 1770, y: 1670, width: 260, height: 30 },
+  { x: 2230, y: 1670, width: 260, height: 30 },
+  { x: 2000, y: 1570, width: 520, height: 30 },
+  { x: 1770, y: 1470, width: 220, height: 30 },
+  { x: 2230, y: 1470, width: 220, height: 30 },
+  { x: 2000, y: 1370, width: 360, height: 30 },
+  { x: 2000, y: 1270, width: 200, height: 30 },
+  { x: 2000, y: 1170, width: 140, height: 30 },
+
+  { x: 2570, y: 1670, width: 260, height: 30 },
+  { x: 3030, y: 1670, width: 260, height: 30 },
+  { x: 2800, y: 1570, width: 520, height: 30 },
+  { x: 2570, y: 1470, width: 220, height: 30 },
+  { x: 3030, y: 1470, width: 220, height: 30 },
+  { x: 2800, y: 1370, width: 360, height: 30 },
+  { x: 2800, y: 1270, width: 200, height: 30 },
+  { x: 2800, y: 1170, width: 140, height: 30 },
+
+  { x: 3370, y: 1670, width: 260, height: 30 },
+  { x: 3830, y: 1670, width: 260, height: 30 },
+  { x: 3600, y: 1570, width: 520, height: 30 },
+  { x: 3370, y: 1470, width: 220, height: 30 },
+  { x: 3830, y: 1470, width: 220, height: 30 },
+  { x: 3600, y: 1370, width: 360, height: 30 },
+  { x: 3600, y: 1270, width: 200, height: 30 },
+  { x: 3600, y: 1170, width: 140, height: 30 },
+
+  { x: 4170, y: 1670, width: 260, height: 30 },
+  { x: 4630, y: 1670, width: 260, height: 30 },
+  { x: 4400, y: 1570, width: 520, height: 30 },
+  { x: 4170, y: 1470, width: 220, height: 30 },
+  { x: 4630, y: 1470, width: 220, height: 30 },
+  { x: 4400, y: 1370, width: 360, height: 30 },
+  { x: 4400, y: 1270, width: 200, height: 30 },
+  { x: 4400, y: 1170, width: 140, height: 30 },
 ];
 
 export const SPAWNS = [
-  { x: 180, y: 760 },
-  { x: 350, y: 710 },
-  { x: 800, y: 615 },
-  { x: 1050, y: 520 },
-  { x: 1420, y: 760 },
+  { x: 100, y: 1710 },
+  { x: 660, y: 1710 },
+  { x: 900, y: 1710 },
+  { x: 1500, y: 1710 },
+  { x: 1700, y: 1710 },
+  { x: 2300, y: 1710 },
+  { x: 2500, y: 1710 },
+  { x: 3100, y: 1710 },
+  { x: 3300, y: 1710 },
+  { x: 3900, y: 1710 },
+  { x: 4100, y: 1710 },
+  { x: 4700, y: 1710 },
 ];
 
 export const LOOT_SPAWNS = [
-  { x: 180, y: 820 },
-  { x: 350, y: 720 },
-  { x: 800, y: 620 },
-  { x: 550, y: 525 },
-  { x: 1050, y: 525 },
-  { x: 800, y: 430 },
-  { x: 1420, y: 820 },
+  { x: 220, y: 1624 },
+  { x: 430, y: 1524 },
+  { x: 150, y: 1424 },
+  { x: 430, y: 1324 },
+  { x: 650, y: 1224 },
+  { x: 970, y: 1624 },
+  { x: 1220, y: 1524 },
+  { x: 940, y: 1424 },
+  { x: 1230, y: 1324 },
+  { x: 1230, y: 1224 },
+  { x: 1770, y: 1624 },
+  { x: 2000, y: 1524 },
+  { x: 1770, y: 1424 },
+  { x: 2000, y: 1324 },
+  { x: 2000, y: 1124 },
+  { x: 2570, y: 1624 },
+  { x: 2800, y: 1524 },
+  { x: 3030, y: 1424 },
+  { x: 2800, y: 1324 },
+  { x: 2800, y: 1124 },
+  { x: 3370, y: 1624 },
+  { x: 3600, y: 1524 },
+  { x: 3830, y: 1424 },
+  { x: 3600, y: 1324 },
+  { x: 3600, y: 1124 },
+  { x: 4170, y: 1624 },
+  { x: 4400, y: 1524 },
+  { x: 4630, y: 1424 },
+  { x: 4400, y: 1324 },
+  { x: 4400, y: 1124 },
 ];
 
 export type ItemId = "sword" | "pistol" | "rifle" | "scattergun" | "plasma" | "medkit";
