@@ -1,6 +1,6 @@
 import { io, Socket } from "socket.io-client";
-import { INVENTORY_SIZE, ITEMS, PLATFORMS, WORLD, ZONES } from "../shared/game";
-import type { ChatMessage, InventorySlot, InventoryState, PlayerState, Snapshot } from "../shared/game";
+import { INVENTORY_SIZE, ITEMS, LIGHTS, PLATFORMS, WORLD, ZONES } from "../shared/game";
+import type { ChatMessage, ImpactEvent, InventorySlot, InventoryState, ItemId, PlayerState, Snapshot } from "../shared/game";
 import "./style.css";
 
 type RenderPlayer = {
@@ -11,14 +11,46 @@ type RenderPlayer = {
   state: PlayerState;
 };
 
+type BulletVisual = {
+  item: ItemId;
+  x: number;
+  y: number;
+  targetX: number;
+  targetY: number;
+  previousX: number;
+  previousY: number;
+};
+
+type ImpactParticle = {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  life: number;
+  maxLife: number;
+  color: string;
+  size: number;
+};
+
+type ImpactFlash = {
+  x: number;
+  y: number;
+  life: number;
+  maxLife: number;
+  color: string;
+};
+
 const VIEW_WIDTH = 1280;
 const VIEW_HEIGHT = 720;
 const canvas = document.querySelector<HTMLCanvasElement>("#game")!;
 const context = canvas.getContext("2d")!;
 const socket: Socket = io({ transports: ["websocket", "polling"] });
 const players = new Map<string, RenderPlayer>();
+const bullets = new Map<string, BulletVisual>();
 const keys = new Set<string>();
 const slotButtons: HTMLButtonElement[] = [];
+const impactParticles: ImpactParticle[] = [];
+const impactFlashes: ImpactFlash[] = [];
 
 const healthFill = document.querySelector<HTMLDivElement>("#health-fill")!;
 const healthValue = document.querySelector<HTMLSpanElement>("#health-value")!;
@@ -56,6 +88,7 @@ let killFeedKey = "";
 let leaderboardKey = "";
 let chatActive = false;
 let chatMessages: ChatMessage[] = [];
+let lastRenderAt = 0;
 
 function applyInventory(next: InventoryState) {
   if (next.slots.length !== INVENTORY_SIZE) return;
@@ -224,6 +257,87 @@ function updateHud() {
   weaponReady.textContent = mine.weaponReadyIn > 0 ? `${(mine.weaponReadyIn / 1000).toFixed(1)} 秒` : "就绪";
 }
 
+function rgba(hex: string, alpha: number) {
+  const value = hex.replace("#", "");
+  const red = Number.parseInt(value.slice(0, 2), 16);
+  const green = Number.parseInt(value.slice(2, 4), 16);
+  const blue = Number.parseInt(value.slice(4, 6), 16);
+  return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
+}
+
+function spawnImpact(x: number, y: number, item: ItemId) {
+  const color = ITEMS[item].color;
+  const maxLife = item === "plasma" ? 360 : 250;
+  impactFlashes.push({ x, y, color, life: maxLife, maxLife });
+  for (let index = 0; index < 13; index += 1) {
+    const angle = (Math.PI * 2 * index) / 13 + (Math.random() - 0.5) * 0.42;
+    const life = 210 + Math.random() * 330;
+    const speed = 0.1 + Math.random() * 0.19;
+    impactParticles.push({
+      x,
+      y,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed - 0.04,
+      life,
+      maxLife: life,
+      color,
+      size: 1.5 + Math.random() * 3.4,
+    });
+  }
+  impactParticles.splice(0, Math.max(0, impactParticles.length - 360));
+  impactFlashes.splice(0, Math.max(0, impactFlashes.length - 24));
+}
+
+function syncBullets(snapshot: Snapshot) {
+  const activeIds = new Set<string>();
+  for (const bullet of snapshot.bullets) {
+    activeIds.add(bullet.id);
+    const visual = bullets.get(bullet.id);
+    if (visual) {
+      visual.targetX = bullet.x;
+      visual.targetY = bullet.y;
+      continue;
+    }
+    bullets.set(bullet.id, {
+      item: bullet.item,
+      x: bullet.x,
+      y: bullet.y,
+      targetX: bullet.x,
+      targetY: bullet.y,
+      previousX: bullet.x,
+      previousY: bullet.y,
+    });
+  }
+  for (const [id, visual] of bullets) {
+    if (activeIds.has(id)) continue;
+    bullets.delete(id);
+  }
+}
+
+function updateVisualEffects(now: number) {
+  const delta = lastRenderAt === 0 ? 16 : Math.min(40, Math.max(1, now - lastRenderAt));
+  lastRenderAt = now;
+  for (const visual of bullets.values()) {
+    visual.previousX = visual.x;
+    visual.previousY = visual.y;
+    visual.x += (visual.targetX - visual.x) * 0.52;
+    visual.y += (visual.targetY - visual.y) * 0.52;
+  }
+  for (let index = impactParticles.length - 1; index >= 0; index -= 1) {
+    const particle = impactParticles[index];
+    particle.x += particle.vx * delta;
+    particle.vy += 0.0009 * delta;
+    particle.y += particle.vy * delta;
+    particle.life -= delta;
+    if (particle.life <= 0) impactParticles.splice(index, 1);
+  }
+  for (let index = impactFlashes.length - 1; index >= 0; index -= 1) {
+    const flash = impactFlashes[index];
+    flash.life -= delta;
+    if (flash.life <= 0) impactFlashes.splice(index, 1);
+  }
+}
+
 socket.on("welcome", ({ id, inventory: nextInventory }: { id: string; inventory: InventoryState }) => {
   myId = id;
   applyInventory(nextInventory);
@@ -232,6 +346,10 @@ socket.on("welcome", ({ id, inventory: nextInventory }: { id: string; inventory:
 
 socket.on("inventory", (nextInventory: InventoryState) => applyInventory(nextInventory));
 socket.on("notice", ({ message }: { message: string }) => showNotice(message));
+socket.on("impact", (impact: ImpactEvent) => {
+  bullets.delete(impact.bulletId);
+  spawnImpact(impact.x, impact.y, impact.item);
+});
 socket.on("chatHistory", (history: ChatMessage[]) => {
   chatMessages = history.slice(-60);
   renderChat();
@@ -260,6 +378,7 @@ socket.on("snapshot", (snapshot: Snapshot) => {
   for (const id of players.keys()) {
     if (!activeIds.has(id)) players.delete(id);
   }
+  syncBullets(snapshot);
   updateHud();
   updateKillFeed(snapshot);
   updateLeaderboard(snapshot);
@@ -396,6 +515,135 @@ function drawArena() {
   }
 }
 
+function drawLightFixtures() {
+  context.save();
+  for (const light of LIGHTS) {
+    context.strokeStyle = "#090f14";
+    context.fillStyle = "#1c2830";
+    context.lineWidth = 3;
+    if (light.kind === "lamp") {
+      context.beginPath();
+      context.moveTo(light.x, light.y + 4);
+      context.lineTo(light.x, light.y + 52);
+      context.stroke();
+      context.fillRect(light.x - 10, light.y - 30, 20, 10);
+      context.strokeRect(light.x - 10, light.y - 30, 20, 10);
+    } else {
+      context.save();
+      context.translate(light.x, light.y);
+      context.rotate(light.angle ?? Math.PI / 2);
+      context.fillRect(-12, -7, 25, 14);
+      context.strokeRect(-12, -7, 25, 14);
+      context.fillStyle = light.color;
+      context.fillRect(10, -4, 5, 8);
+      context.restore();
+    }
+    context.fillStyle = light.color;
+    context.beginPath();
+    context.arc(light.x, light.y, light.kind === "lamp" ? 4 : 5, 0, Math.PI * 2);
+    context.fill();
+  }
+  context.restore();
+}
+
+function drawLighting() {
+  const left = cameraX - VIEW_WIDTH / 2;
+  const top = cameraY - VIEW_HEIGHT / 2;
+  context.save();
+  context.fillStyle = "rgba(2, 5, 9, 0.56)";
+  context.fillRect(left, top, VIEW_WIDTH, VIEW_HEIGHT);
+  context.globalCompositeOperation = "lighter";
+  for (const light of LIGHTS) {
+    if (light.x + light.radius < left || light.x - light.radius > left + VIEW_WIDTH) continue;
+    if (light.y + light.radius < top || light.y - light.radius > top + VIEW_HEIGHT) continue;
+    const gradient = context.createRadialGradient(light.x, light.y, 0, light.x, light.y, light.radius);
+    gradient.addColorStop(0, rgba(light.color, 0.38));
+    gradient.addColorStop(0.32, rgba(light.color, 0.18));
+    gradient.addColorStop(1, rgba(light.color, 0));
+    context.save();
+    if (light.kind === "spot") {
+      const angle = light.angle ?? Math.PI / 2;
+      const spread = light.spread ?? 0.4;
+      context.beginPath();
+      context.moveTo(light.x, light.y);
+      context.lineTo(
+        light.x + Math.cos(angle - spread) * light.radius,
+        light.y + Math.sin(angle - spread) * light.radius,
+      );
+      context.lineTo(
+        light.x + Math.cos(angle + spread) * light.radius,
+        light.y + Math.sin(angle + spread) * light.radius,
+      );
+      context.closePath();
+      context.clip();
+    }
+    context.fillStyle = gradient;
+    context.fillRect(light.x - light.radius, light.y - light.radius, light.radius * 2, light.radius * 2);
+    context.restore();
+  }
+  context.restore();
+}
+
+function drawBullets() {
+  context.save();
+  context.globalCompositeOperation = "lighter";
+  context.lineCap = "round";
+  for (const bullet of bullets.values()) {
+    const definition = ITEMS[bullet.item];
+    const radius = bullet.item === "plasma" ? 9 : 4;
+    const dx = bullet.x - bullet.previousX;
+    const dy = bullet.y - bullet.previousY;
+    const gradient = context.createRadialGradient(bullet.x, bullet.y, 0, bullet.x, bullet.y, radius * 5);
+    gradient.addColorStop(0, rgba(definition.accent, 0.95));
+    gradient.addColorStop(0.24, rgba(definition.color, 0.78));
+    gradient.addColorStop(1, rgba(definition.color, 0));
+    context.fillStyle = gradient;
+    context.beginPath();
+    context.arc(bullet.x, bullet.y, radius * 5, 0, Math.PI * 2);
+    context.fill();
+    if (Math.hypot(dx, dy) > 0.2) {
+      context.strokeStyle = rgba(definition.color, 0.62);
+      context.lineWidth = radius * 1.35;
+      context.beginPath();
+      context.moveTo(bullet.x, bullet.y);
+      context.lineTo(bullet.x - dx * 5, bullet.y - dy * 5);
+      context.stroke();
+    }
+    context.fillStyle = definition.accent;
+    context.beginPath();
+    context.arc(bullet.x, bullet.y, radius, 0, Math.PI * 2);
+    context.fill();
+  }
+  context.restore();
+}
+
+function drawImpactEffects() {
+  context.save();
+  context.globalCompositeOperation = "lighter";
+  for (const flash of impactFlashes) {
+    const progress = flash.life / flash.maxLife;
+    const radius = 24 + (1 - progress) * 52;
+    const gradient = context.createRadialGradient(flash.x, flash.y, 0, flash.x, flash.y, radius);
+    gradient.addColorStop(0, rgba("#ffffff", progress * 0.82));
+    gradient.addColorStop(0.25, rgba(flash.color, progress * 0.58));
+    gradient.addColorStop(1, rgba(flash.color, 0));
+    context.fillStyle = gradient;
+    context.beginPath();
+    context.arc(flash.x, flash.y, radius, 0, Math.PI * 2);
+    context.fill();
+  }
+  for (const particle of impactParticles) {
+    const alpha = particle.life / particle.maxLife;
+    context.save();
+    context.translate(particle.x, particle.y);
+    context.rotate(Math.atan2(particle.vy, particle.vx));
+    context.fillStyle = rgba(particle.color, alpha * 0.88);
+    context.fillRect(-particle.size * 1.4, -particle.size / 2, particle.size * 2.8, particle.size);
+    context.restore();
+  }
+  context.restore();
+}
+
 function drawHeldItem(state: PlayerState) {
   if (!state.activeItem) return;
   const weapon = ITEMS[state.activeItem];
@@ -520,6 +768,7 @@ function drawReticle() {
 }
 
 function render(now: number) {
+  updateVisualEffects(now);
   for (const player of players.values()) {
     player.x += (player.targetX - player.x) * 0.34;
     player.y += (player.targetY - player.y) * 0.34;
@@ -534,16 +783,14 @@ function render(now: number) {
   context.save();
   context.translate(VIEW_WIDTH / 2 - cameraX, VIEW_HEIGHT / 2 - cameraY);
   drawArena();
+  drawLightFixtures();
   if (latestSnapshot) {
     for (const pickup of latestSnapshot.pickups) drawPickup(pickup.item, pickup.x, pickup.y);
-    for (const bullet of latestSnapshot.bullets) {
-      context.fillStyle = ITEMS[bullet.item].color;
-      context.beginPath();
-      context.arc(bullet.x, bullet.y, bullet.item === "plasma" ? 8 : 4, 0, Math.PI * 2);
-      context.fill();
-    }
   }
   for (const [id, player] of players) drawPlayer(player, id === myId);
+  drawLighting();
+  drawBullets();
+  drawImpactEffects();
   context.restore();
   drawReticle();
   sendInput(now);

@@ -8,6 +8,7 @@ import {
   DEV_SOCKET_PORT,
   ChatMessage,
   INVENTORY_SIZE,
+  ImpactEvent,
   InputState,
   InventorySlot,
   InventoryState,
@@ -254,9 +255,18 @@ function damage(target: Player, attacker: Player, amount: number, now: number, i
   recordKill(attacker, target, item);
 }
 
-function removeBullet(id: string) {
+function removeBullet(id: string, shouldImpact = false) {
   const bullet = bullets.get(id);
   if (!bullet) return;
+  if (shouldImpact) {
+    const impact: ImpactEvent = {
+      bulletId: bullet.id,
+      item: bullet.item,
+      x: bullet.body.position.x,
+      y: bullet.body.position.y,
+    };
+    io.emit("impact", impact);
+  }
   World.remove(engine.world, bullet.body);
   bullets.delete(id);
 }
@@ -427,7 +437,7 @@ function resolveBullets(now: number) {
       continue;
     }
     if (Query.collides(bullet.body, terrain).length > 0) {
-      removeBullet(bullet.id);
+      removeBullet(bullet.id, true);
       continue;
     }
     for (const target of players.values()) {
@@ -435,7 +445,7 @@ function resolveBullets(now: number) {
       if (Query.collides(bullet.body, [target.body]).length === 0) continue;
       const attacker = players.get(bullet.ownerId);
       if (attacker) damage(target, attacker, ITEMS[bullet.item].damage ?? 0, now, bullet.item);
-      removeBullet(bullet.id);
+      removeBullet(bullet.id, true);
       break;
     }
   }

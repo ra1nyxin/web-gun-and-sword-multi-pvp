@@ -40,6 +40,37 @@ export const ZONES: ZoneDefinition[] = [
   { name: "天际塔楼", x: 4000, y: 0, width: 800, height: WORLD.height, color: "#302d42", gridColor: "#4c4967", accent: "#d971ef" },
 ];
 
+export type LightDefinition = {
+  x: number;
+  y: number;
+  radius: number;
+  color: string;
+  kind: "lamp" | "spot";
+  angle?: number;
+  spread?: number;
+};
+
+export const LIGHTS: LightDefinition[] = [
+  { x: 220, y: 1595, radius: 240, color: "#70d6ff", kind: "lamp" },
+  { x: 430, y: 1295, radius: 280, color: "#b9f6ff", kind: "spot", angle: Math.PI / 2, spread: 0.42 },
+  { x: 700, y: 1395, radius: 200, color: "#70d6ff", kind: "lamp" },
+  { x: 970, y: 1595, radius: 240, color: "#ff9f68", kind: "lamp" },
+  { x: 1230, y: 1295, radius: 300, color: "#ffca80", kind: "spot", angle: Math.PI / 2, spread: 0.4 },
+  { x: 1510, y: 1395, radius: 190, color: "#ff9f68", kind: "lamp" },
+  { x: 1740, y: 1595, radius: 220, color: "#75b8ff", kind: "lamp" },
+  { x: 2000, y: 1120, radius: 420, color: "#b7dcff", kind: "spot", angle: Math.PI / 2, spread: 0.46 },
+  { x: 2260, y: 1595, radius: 220, color: "#75b8ff", kind: "lamp" },
+  { x: 2470, y: 1595, radius: 220, color: "#9be49a", kind: "lamp" },
+  { x: 2800, y: 1220, radius: 340, color: "#c7ffb5", kind: "spot", angle: Math.PI / 2, spread: 0.43 },
+  { x: 3130, y: 1595, radius: 210, color: "#9be49a", kind: "lamp" },
+  { x: 3300, y: 1595, radius: 220, color: "#ffd083", kind: "lamp" },
+  { x: 3650, y: 1295, radius: 320, color: "#fff0b0", kind: "spot", angle: Math.PI / 2, spread: 0.4 },
+  { x: 3930, y: 1595, radius: 190, color: "#ffd083", kind: "lamp" },
+  { x: 4110, y: 1595, radius: 210, color: "#e4adff", kind: "lamp" },
+  { x: 4400, y: 920, radius: 420, color: "#f4c6ff", kind: "spot", angle: Math.PI / 2, spread: 0.45 },
+  { x: 4690, y: 1595, radius: 200, color: "#e4adff", kind: "lamp" },
+];
+
 export const PLATFORMS: PlatformDefinition[] = [
   { x: 2400, y: 1780, width: 4840, height: 48 },
   { x: 12, y: 900, width: 24, height: 1800 },
@@ -298,6 +329,13 @@ export type PlayerState = {
 
 export type BulletState = {
   id: string;
+  item: ItemId;
+  x: number;
+  y: number;
+};
+
+export type ImpactEvent = {
+  bulletId: string;
   item: ItemId;
   x: number;
   y: number;
