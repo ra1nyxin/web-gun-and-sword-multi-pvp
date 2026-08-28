@@ -6,12 +6,20 @@ import Matter from "matter-js";
 import { Server } from "socket.io";
 import {
   DEV_SOCKET_PORT,
+  INVENTORY_SIZE,
   InputState,
+  InventorySlot,
+  InventoryState,
+  ItemId,
+  ITEMS,
+  KillEvent,
+  LOOT_SPAWNS,
   PLATFORMS,
   PORT,
   PlayerState,
   SPAWNS,
   Snapshot,
+  STARTING_INVENTORY,
   WORLD,
 } from "../shared/game.js";
 
@@ -26,9 +34,7 @@ const io = new Server(httpServer, {
   pingTimeout: 10_000,
 });
 
-const engine = Engine.create({
-  gravity: { x: 0, y: WORLD.gravityY },
-});
+const engine = Engine.create({ gravity: { x: 0, y: WORLD.gravityY } });
 engine.positionIterations = 8;
 engine.velocityIterations = 6;
 
@@ -46,28 +52,49 @@ type Player = {
   name: string;
   body: Matter.Body;
   input: InputState;
+  inventory: InventorySlot[];
+  selectedSlot: number;
+  cooldowns: Record<ItemId, number>;
   health: number;
   kills: number;
   deaths: number;
   dead: boolean;
   respawnAt: number;
-  lastShotAt: number;
-  lastSlashAt: number;
   slashUntil: number;
   swingHits: Set<string>;
+  lastNoticeAt: number;
 };
 
 type Bullet = {
   id: string;
+  item: ItemId;
   ownerId: string;
   body: Matter.Body;
   expiresAt: number;
 };
 
+type Pickup = {
+  id: string;
+  item: ItemId;
+  x: number;
+  y: number;
+  expiresAt: number;
+  protectedOwnerId: string | null;
+  ownerProtectionUntil: number;
+};
+
 const players = new Map<string, Player>();
 const bullets = new Map<string, Bullet>();
+const pickups = new Map<string, Pickup>();
+const killFeed: KillEvent[] = [];
+const lootCycle: ItemId[] = ["scattergun", "plasma", "medkit", "rifle", "sword", "pistol"];
+
 let bulletSequence = 0;
+let pickupSequence = 0;
+let playerSequence = 0;
 let spawnSequence = 0;
+let lootSequence = 0;
+let killSequence = 0;
 
 const emptyInput = (): InputState => ({
   left: false,
@@ -77,10 +104,37 @@ const emptyInput = (): InputState => ({
   aimY: 0,
 });
 
+const emptyCooldowns = (): Record<ItemId, number> => ({
+  sword: 0,
+  pistol: 0,
+  rifle: 0,
+  scattergun: 0,
+  plasma: 0,
+  medkit: 0,
+});
+
 function getSpawn() {
   const spawn = SPAWNS[spawnSequence % SPAWNS.length];
   spawnSequence += 1;
   return spawn;
+}
+
+function activeItem(player: Player) {
+  return player.inventory[player.selectedSlot] ?? null;
+}
+
+function inventoryState(player: Player): InventoryState {
+  return { slots: [...player.inventory], selectedSlot: player.selectedSlot };
+}
+
+function syncInventory(player: Player) {
+  io.to(player.id).emit("inventory", inventoryState(player));
+}
+
+function notice(player: Player, message: string, now: number) {
+  if (now - player.lastNoticeAt < 450) return;
+  player.lastNoticeAt = now;
+  io.to(player.id).emit("notice", { message });
 }
 
 function normalizeAim(input: InputState) {
@@ -90,6 +144,8 @@ function normalizeAim(input: InputState) {
 
 function playerState(player: Player, now: number): PlayerState {
   const aim = normalizeAim(player.input);
+  const item = activeItem(player);
+  const readyIn = item ? Math.max(0, player.cooldowns[item] + ITEMS[item].cooldown - now) : 0;
   return {
     id: player.id,
     name: player.name,
@@ -97,12 +153,15 @@ function playerState(player: Player, now: number): PlayerState {
     y: player.body.position.y,
     vx: player.body.velocity.x,
     vy: player.body.velocity.y,
-    aimX: aim.x,
-    aimY: aim.y,
     health: player.health,
     kills: player.kills,
     deaths: player.deaths,
     dead: player.dead,
+    aimX: aim.x,
+    aimY: aim.y,
+    activeItem: item,
+    selectedSlot: player.selectedSlot,
+    weaponReadyIn: readyIn,
     slashUntil: Math.max(0, player.slashUntil - now),
   };
 }
@@ -115,7 +174,7 @@ function isGrounded(player: Player) {
     const left = platform.x - platform.width / 2;
     const right = platform.x + platform.width / 2;
     const overlapsX = bounds.max.x > left + 4 && bounds.min.x < right - 4;
-    return overlapsX && feetY >= top - 5 && feetY <= top + 9 && player.body.velocity.y >= -1;
+    return overlapsX && feetY >= top - 6 && feetY <= top + 10 && player.body.velocity.y >= -1;
   });
 }
 
@@ -131,7 +190,18 @@ function respawn(player: Player) {
   player.body.collisionFilter.mask = 0xffffffff;
 }
 
-function damage(target: Player, attacker: Player, amount: number, now: number) {
+function recordKill(attacker: Player, target: Player, item: ItemId) {
+  killSequence += 1;
+  killFeed.unshift({
+    id: `k${killSequence}`,
+    attacker: attacker.name,
+    victim: target.name,
+    item,
+  });
+  killFeed.splice(6);
+}
+
+function damage(target: Player, attacker: Player, amount: number, now: number, item: ItemId) {
   if (target.dead || target.id === attacker.id) return;
   target.health = Math.max(0, target.health - amount);
   if (target.health > 0) return;
@@ -142,6 +212,7 @@ function damage(target: Player, attacker: Player, amount: number, now: number) {
   target.body.collisionFilter.mask = 0;
   Body.setVelocity(target.body, { x: 0, y: 0 });
   attacker.kills += 1;
+  recordKill(attacker, target, item);
 }
 
 function removeBullet(id: string) {
@@ -151,46 +222,157 @@ function removeBullet(id: string) {
   bullets.delete(id);
 }
 
-function shoot(player: Player, now: number) {
-  if (player.dead || now - player.lastShotAt < 230) return;
-  player.lastShotAt = now;
-  const aim = normalizeAim(player.input);
-  const origin = {
-    x: player.body.position.x + aim.x * 25,
-    y: player.body.position.y + aim.y * 7,
-  };
-  const body = Bodies.circle(origin.x, origin.y, 5, {
-    isSensor: true,
-    frictionAir: 0,
-    label: "bullet",
-  });
-  Body.setVelocity(body, { x: aim.x * 19, y: aim.y * 19 });
-  const id = `b${bulletSequence += 1}`;
-  bullets.set(id, { id, ownerId: player.id, body, expiresAt: now + 1_250 });
-  World.add(engine.world, body);
+function removePickup(id: string) {
+  pickups.delete(id);
 }
 
-function slash(player: Player, now: number) {
-  if (player.dead || now - player.lastSlashAt < 560) return;
-  player.lastSlashAt = now;
-  player.slashUntil = now + 155;
-  player.swingHits.clear();
+function spawnPickup(
+  item: ItemId,
+  x: number,
+  y: number,
+  now: number,
+  protectedOwnerId: string | null = null,
+  ownerProtectionMs = 0,
+) {
+  pickupSequence += 1;
+  const pickup: Pickup = {
+    id: `i${pickupSequence}`,
+    item,
+    x: Math.max(35, Math.min(WORLD.width - 35, x)),
+    y: Math.max(40, Math.min(WORLD.height - 60, y)),
+    expiresAt: now + 90_000,
+    protectedOwnerId,
+    ownerProtectionUntil: now + ownerProtectionMs,
+  };
+  pickups.set(pickup.id, pickup);
+}
+
+function spawnWorldLoot(now: number) {
+  if (pickups.size >= LOOT_SPAWNS.length) return;
+  const point = LOOT_SPAWNS[lootSequence % LOOT_SPAWNS.length];
+  const item = lootCycle[lootSequence % lootCycle.length];
+  lootSequence += 1;
+  spawnPickup(item, point.x, point.y, now);
+}
+
+function shootProjectile(player: Player, item: ItemId, now: number) {
+  const weapon = ITEMS[item];
+  const aim = normalizeAim(player.input);
+  const pellets = weapon.projectiles ?? 1;
+  const spread = weapon.spread ?? 0;
+  const baseAngle = Math.atan2(aim.y, aim.x);
+  for (let index = 0; index < pellets; index += 1) {
+    const factor = pellets === 1 ? 0 : index / (pellets - 1) - 0.5;
+    const angle = baseAngle + factor * spread;
+    const direction = { x: Math.cos(angle), y: Math.sin(angle) };
+    const body = Bodies.circle(
+      player.body.position.x + direction.x * 25,
+      player.body.position.y + direction.y * 7,
+      weapon.projectileRadius ?? 5,
+      { isSensor: true, frictionAir: 0, label: "bullet" },
+    );
+    Body.setVelocity(body, {
+      x: direction.x * (weapon.projectileSpeed ?? 19),
+      y: direction.y * (weapon.projectileSpeed ?? 19),
+    });
+    bulletSequence += 1;
+    bullets.set(`b${bulletSequence}`, {
+      id: `b${bulletSequence}`,
+      item,
+      ownerId: player.id,
+      body,
+      expiresAt: now + (weapon.projectileLifetime ?? 1250),
+    });
+    World.add(engine.world, body);
+  }
+}
+
+function useSelectedItem(player: Player, now: number) {
+  if (player.dead) return;
+  const item = activeItem(player);
+  if (!item) {
+    notice(player, "EMPTY SLOT", now);
+    return;
+  }
+  const weapon = ITEMS[item];
+  if (now - player.cooldowns[item] < weapon.cooldown) return;
+
+  if (weapon.kind === "melee") {
+    player.cooldowns[item] = now;
+    player.slashUntil = now + 155;
+    player.swingHits.clear();
+    return;
+  }
+  if (weapon.kind === "utility") {
+    const restored = Math.min(weapon.heal ?? 0, WORLD.maxHealth - player.health);
+    if (restored === 0) {
+      notice(player, "HEALTH FULL", now);
+      return;
+    }
+    player.cooldowns[item] = now;
+    player.health += restored;
+    player.inventory[player.selectedSlot] = null;
+    syncInventory(player);
+    notice(player, `HEAL +${restored}`, now);
+    return;
+  }
+  player.cooldowns[item] = now;
+  shootProjectile(player, item, now);
+}
+
+function useLegacySword(player: Player, now: number) {
+  const swordSlot = player.inventory.indexOf("sword");
+  if (swordSlot === -1) return;
+  const selectedSlot = player.selectedSlot;
+  player.selectedSlot = swordSlot;
+  useSelectedItem(player, now);
+  player.selectedSlot = selectedSlot;
+}
+
+function dropSelectedItem(player: Player, now: number) {
+  if (player.dead) return;
+  const item = activeItem(player);
+  if (!item) {
+    notice(player, "NOTHING TO DROP", now);
+    return;
+  }
+  const aim = normalizeAim(player.input);
+  player.inventory[player.selectedSlot] = null;
+  spawnPickup(
+    item,
+    player.body.position.x + aim.x * 58,
+    player.body.position.y + aim.y * 10 - 8,
+    now,
+    player.id,
+    700,
+  );
+  syncInventory(player);
+  notice(player, `DROPPED ${ITEMS[item].label}`, now);
+}
+
+function selectSlot(player: Player, slot: unknown) {
+  if (!Number.isInteger(slot)) return;
+  const value = Number(slot);
+  if (value < 0 || value >= INVENTORY_SIZE || player.selectedSlot === value) return;
+  player.selectedSlot = value;
+  syncInventory(player);
 }
 
 function resolveSwordSwings(now: number) {
   for (const attacker of players.values()) {
     if (attacker.dead || attacker.slashUntil < now) continue;
     const aim = normalizeAim(attacker.input);
+    const weapon = ITEMS.sword;
     for (const target of players.values()) {
       if (target.dead || target.id === attacker.id || attacker.swingHits.has(target.id)) continue;
       const dx = target.body.position.x - attacker.body.position.x;
       const dy = target.body.position.y - attacker.body.position.y;
       const distance = Math.hypot(dx, dy);
-      if (distance > 82 || distance < 0.01) continue;
+      if (distance > (weapon.range ?? 80) || distance < 0.01) continue;
       const facing = (dx * aim.x + dy * aim.y) / distance;
-      if (facing < 0.28) continue;
+      if (facing < 0.25) continue;
       attacker.swingHits.add(target.id);
-      damage(target, attacker, 42, now);
+      damage(target, attacker, weapon.damage ?? 0, now, "sword");
     }
   }
 }
@@ -209,8 +391,32 @@ function resolveBullets(now: number) {
       if (target.dead || target.id === bullet.ownerId) continue;
       if (Query.collides(bullet.body, [target.body]).length === 0) continue;
       const attacker = players.get(bullet.ownerId);
-      if (attacker) damage(target, attacker, 24, now);
+      if (attacker) damage(target, attacker, ITEMS[bullet.item].damage ?? 0, now, bullet.item);
       removeBullet(bullet.id);
+      break;
+    }
+  }
+}
+
+function resolvePickups(now: number) {
+  for (const pickup of [...pickups.values()]) {
+    if (pickup.expiresAt <= now) {
+      removePickup(pickup.id);
+      continue;
+    }
+    for (const player of players.values()) {
+      if (player.dead) continue;
+      if (pickup.protectedOwnerId === player.id && pickup.ownerProtectionUntil > now) continue;
+      if (Math.hypot(player.body.position.x - pickup.x, player.body.position.y - pickup.y) > 42) continue;
+      const emptySlot = player.inventory.findIndex((slot) => slot === null);
+      if (emptySlot === -1) {
+        notice(player, "PACK FULL", now);
+        continue;
+      }
+      player.inventory[emptySlot] = pickup.item;
+      removePickup(pickup.id);
+      syncInventory(player);
+      notice(player, `PICKED ${ITEMS[pickup.item].label}`, now);
       break;
     }
   }
@@ -233,17 +439,28 @@ function snapshot(now: number): Snapshot {
     players: [...players.values()].map((player) => playerState(player, now)),
     bullets: [...bullets.values()].map((bullet) => ({
       id: bullet.id,
+      item: bullet.item,
       x: bullet.body.position.x,
       y: bullet.body.position.y,
     })),
+    pickups: [...pickups.values()].map((pickup) => ({
+      id: pickup.id,
+      item: pickup.item,
+      x: pickup.x,
+      y: pickup.y,
+    })),
+    killFeed: [...killFeed],
   };
 }
 
+for (let index = 0; index < 5; index += 1) spawnWorldLoot(Date.now());
+
 io.on("connection", (socket) => {
   const spawn = getSpawn();
+  playerSequence += 1;
   const player: Player = {
     id: socket.id,
-    name: `Fighter ${players.size + 1}`,
+    name: `Fighter ${playerSequence}`,
     body: Bodies.rectangle(spawn.x, spawn.y, WORLD.playerWidth, WORLD.playerHeight, {
       friction: 0,
       frictionAir: 0.04,
@@ -252,19 +469,21 @@ io.on("connection", (socket) => {
       inertia: Infinity,
     }),
     input: emptyInput(),
+    inventory: [...STARTING_INVENTORY],
+    selectedSlot: 0,
+    cooldowns: emptyCooldowns(),
     health: WORLD.maxHealth,
     kills: 0,
     deaths: 0,
     dead: false,
     respawnAt: 0,
-    lastShotAt: 0,
-    lastSlashAt: 0,
     slashUntil: 0,
     swingHits: new Set(),
+    lastNoticeAt: 0,
   };
   players.set(socket.id, player);
   World.add(engine.world, player.body);
-  socket.emit("welcome", { id: socket.id });
+  socket.emit("welcome", { id: socket.id, inventory: inventoryState(player) });
 
   socket.on("input", (candidate: Partial<InputState>) => {
     if (typeof candidate.left === "boolean") player.input.left = candidate.left;
@@ -273,8 +492,11 @@ io.on("connection", (socket) => {
     if (Number.isFinite(candidate.aimX)) player.input.aimX = Number(candidate.aimX);
     if (Number.isFinite(candidate.aimY)) player.input.aimY = Number(candidate.aimY);
   });
-  socket.on("shoot", () => shoot(player, Date.now()));
-  socket.on("slash", () => slash(player, Date.now()));
+  socket.on("use", () => useSelectedItem(player, Date.now()));
+  socket.on("drop", () => dropSelectedItem(player, Date.now()));
+  socket.on("selectSlot", (slot: unknown) => selectSlot(player, slot));
+  socket.on("shoot", () => useSelectedItem(player, Date.now()));
+  socket.on("slash", () => useLegacySword(player, Date.now()));
   socket.on("disconnect", () => {
     players.delete(socket.id);
     World.remove(engine.world, player.body);
@@ -290,14 +512,17 @@ setInterval(() => {
   Engine.update(engine, 1000 / 60);
   resolveSwordSwings(now);
   resolveBullets(now);
+  resolvePickups(now);
 }, 1000 / 60);
+
+setInterval(() => spawnWorldLoot(Date.now()), 6_500);
 
 setInterval(() => {
   io.emit("snapshot", snapshot(Date.now()));
 }, 1000 / 20);
 
 app.get("/health", (_request, response) => {
-  response.json({ ok: true, players: players.size });
+  response.json({ ok: true, players: players.size, pickups: pickups.size });
 });
 
 if (isProduction) {

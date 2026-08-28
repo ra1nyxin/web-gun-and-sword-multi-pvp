@@ -23,33 +23,44 @@ body {
   background: #101820;
 }
 
+button {
+  font: inherit;
+}
+
 #game {
   width: 100%;
   height: 100%;
   display: block;
   cursor: crosshair;
+  touch-action: none;
 }
 
 #hud,
 #score,
-#respawn {
+#respawn,
+#notice {
   position: fixed;
   z-index: 5;
   border: 1px solid rgba(233, 242, 231, 0.45);
-  background: rgba(11, 18, 23, 0.78);
+  background: rgba(11, 18, 23, 0.82);
   box-shadow: 3px 3px 0 rgba(0, 0, 0, 0.32);
 }
 
 #hud {
   top: 18px;
   left: 18px;
-  width: 178px;
-  height: 31px;
-  padding: 8px;
+  width: 215px;
+  padding: 9px;
+}
+
+.health-row {
+  position: relative;
+  display: flex;
+  align-items: center;
 }
 
 .health-track {
-  width: 132px;
+  width: 158px;
   height: 13px;
   background: #263238;
   border: 1px solid #0b1217;
@@ -63,21 +74,68 @@ body {
 }
 
 #health-value {
-  position: absolute;
-  top: 6px;
-  right: 9px;
-  min-width: 22px;
+  width: 31px;
+  margin-left: 8px;
   color: #e9f2e7;
   font-size: 13px;
   font-weight: 700;
   text-align: right;
 }
 
+#active-item {
+  display: grid;
+  grid-template-columns: 26px 1fr auto;
+  align-items: center;
+  min-height: 26px;
+  margin-top: 8px;
+  color: #e9f2e7;
+}
+
+#active-item-code {
+  display: grid;
+  width: 23px;
+  height: 19px;
+  place-items: center;
+  border: 1px solid #0b1217;
+  background: var(--item-color, #263238);
+  color: #101820;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+#active-item-name {
+  overflow: hidden;
+  color: #e9f2e7;
+  font-size: 12px;
+  letter-spacing: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#weapon-ready {
+  color: #b8e986;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+#player-stats {
+  display: flex;
+  gap: 12px;
+  margin-top: 6px;
+  color: #d6ad60;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+#player-stats span:last-child {
+  color: #ed8f57;
+}
+
 #score {
   top: 18px;
   right: 18px;
   display: flex;
-  min-width: 100px;
+  min-width: 104px;
   height: 31px;
   align-items: center;
   gap: 10px;
@@ -96,6 +154,142 @@ body {
   font-size: 10px;
 }
 
+#kill-feed,
+#leaderboard {
+  position: fixed;
+  right: 18px;
+  z-index: 5;
+  width: 210px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+#kill-feed {
+  top: 59px;
+}
+
+#kill-feed li {
+  min-height: 23px;
+  margin-bottom: 4px;
+  padding: 5px 7px;
+  border-left: 3px solid var(--weapon-color, #d6ad60);
+  background: rgba(11, 18, 23, 0.73);
+  color: #e9f2e7;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 13px;
+}
+
+#leaderboard {
+  top: 230px;
+  border: 1px solid rgba(233, 242, 231, 0.3);
+  background: rgba(11, 18, 23, 0.75);
+}
+
+#leaderboard li {
+  display: flex;
+  min-height: 26px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 8px;
+  border-bottom: 1px solid rgba(233, 242, 231, 0.13);
+  color: #e9f2e7;
+  font-size: 11px;
+}
+
+#leaderboard li:last-child {
+  border-bottom: 0;
+}
+
+#leaderboard li span:last-child {
+  color: #d6ad60;
+  font-weight: 700;
+}
+
+#inventory {
+  position: fixed;
+  z-index: 5;
+  bottom: 18px;
+  left: 50%;
+  display: grid;
+  grid-template-columns: repeat(9, minmax(0, 1fr));
+  gap: 5px;
+  width: min(96vw, 544px);
+  transform: translateX(-50%);
+}
+
+.inventory-slot {
+  position: relative;
+  display: grid;
+  width: 100%;
+  height: 56px;
+  grid-template-rows: 1fr 14px;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid rgba(233, 242, 231, 0.38);
+  border-radius: 3px;
+  background: rgba(11, 18, 23, 0.86);
+  color: #e9f2e7;
+  cursor: pointer;
+}
+
+.inventory-slot:hover,
+.inventory-slot:focus-visible {
+  border-color: #e9f2e7;
+  outline: 0;
+}
+
+.inventory-slot.selected {
+  border: 3px solid var(--item-color, #e9f2e7);
+  background: rgba(38, 50, 56, 0.96);
+}
+
+.inventory-slot.empty {
+  color: #78909c;
+}
+
+.slot-number {
+  position: absolute;
+  top: 3px;
+  left: 4px;
+  color: #9fb3b9;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.slot-code {
+  align-self: end;
+  color: var(--item-color, #78909c);
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.slot-name {
+  width: 100%;
+  overflow: hidden;
+  padding: 0 3px 3px;
+  color: #cbd8d4;
+  font-size: 8px;
+  font-weight: 700;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#notice {
+  bottom: 88px;
+  left: 50%;
+  max-width: min(86vw, 260px);
+  padding: 8px 11px;
+  color: #ffcf70;
+  font-size: 12px;
+  font-weight: 700;
+  text-align: center;
+  transform: translateX(-50%);
+}
+
 #respawn {
   top: 50%;
   left: 50%;
@@ -106,14 +300,46 @@ body {
   transform: translate(-50%, -50%);
 }
 
-@media (max-width: 560px) {
+@media (max-width: 700px) {
   #hud {
     top: 10px;
     left: 10px;
+    width: 188px;
+  }
+
+  .health-track {
+    width: 132px;
   }
 
   #score {
     top: 10px;
     right: 10px;
+  }
+
+  #kill-feed,
+  #leaderboard {
+    right: 10px;
+    width: 164px;
+  }
+
+  #kill-feed {
+    top: 51px;
+  }
+
+  #leaderboard {
+    top: 218px;
+  }
+
+  #inventory {
+    bottom: 10px;
+    gap: 3px;
+  }
+
+  .inventory-slot {
+    height: 48px;
+  }
+
+  .slot-name {
+    font-size: 7px;
   }
 }

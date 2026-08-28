@@ -10,11 +10,19 @@
     <main id="app">
       <canvas id="game" width="1280" height="720" aria-label="Gun and Sword Arena"></canvas>
       <div id="hud" aria-live="polite">
-        <div class="health-track"><div id="health-fill"></div></div>
-        <span id="health-value">100</span>
+        <div class="health-row">
+          <div class="health-track"><div id="health-fill"></div></div>
+          <span id="health-value">100</span>
+        </div>
+        <div id="active-item"><span id="active-item-code">PI</span><strong id="active-item-name">PISTOL</strong><span id="weapon-ready">READY</span></div>
+        <div id="player-stats"><span id="kills">0 K</span><span id="deaths">0 D</span></div>
       </div>
       <div id="score"><span id="player-count">1</span><span id="connection">CONNECTING</span></div>
+      <ol id="kill-feed" aria-live="polite"></ol>
+      <ol id="leaderboard" aria-label="Leaderboard"></ol>
+      <div id="notice" role="status" hidden></div>
       <div id="respawn" hidden>REDEPLOYING</div>
+      <div id="inventory" aria-label="Inventory"></div>
     </main>
     <script type="module" src="/main.ts"></script>
   </body>

@@ -15,8 +15,14 @@ Open `http://localhost:25653`. To let players on the LAN join, open `http://YOUR
 
 - `A` / `D` or arrow keys: move
 - `W` or up arrow: jump
-- Left click: fire gun
-- Right click or `Q`: sword attack
+- Left click: use the selected item
+- Mouse wheel or `1`-`9`: select one of nine inventory slots
+- `Q`: drop the selected item
+- Walk over a world pickup to place it in the first empty slot
+
+## Loadout
+
+Every player starts with a pistol, sword, and rifle. The arena periodically spawns scatterguns, plasma cannons, medkits, and more weapons. A selected medkit restores health once and is consumed. The server validates inventory changes, weapon cooldowns, damage, pickups, drops, and eliminations.
 
 ## Production
 

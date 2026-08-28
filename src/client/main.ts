@@ -1,5 +1,6 @@
 import { io, Socket } from "socket.io-client";
-import { PLATFORMS, PlayerState, Snapshot, WORLD } from "../shared/game";
+import { INVENTORY_SIZE, ITEMS, PLATFORMS, WORLD } from "../shared/game";
+import type { InventorySlot, InventoryState, PlayerState, Snapshot } from "../shared/game";
 import "./style.css";
 
 type RenderPlayer = {
@@ -17,26 +18,169 @@ const context = canvas.getContext("2d")!;
 const socket: Socket = io({ transports: ["websocket", "polling"] });
 const players = new Map<string, RenderPlayer>();
 const keys = new Set<string>();
+const slotButtons: HTMLButtonElement[] = [];
 
 const healthFill = document.querySelector<HTMLDivElement>("#health-fill")!;
 const healthValue = document.querySelector<HTMLSpanElement>("#health-value")!;
 const playerCount = document.querySelector<HTMLSpanElement>("#player-count")!;
 const connection = document.querySelector<HTMLSpanElement>("#connection")!;
 const respawn = document.querySelector<HTMLDivElement>("#respawn")!;
+const activeItemCode = document.querySelector<HTMLSpanElement>("#active-item-code")!;
+const activeItemName = document.querySelector<HTMLElement>("#active-item-name")!;
+const weaponReady = document.querySelector<HTMLSpanElement>("#weapon-ready")!;
+const kills = document.querySelector<HTMLSpanElement>("#kills")!;
+const deaths = document.querySelector<HTMLSpanElement>("#deaths")!;
+const killFeed = document.querySelector<HTMLOListElement>("#kill-feed")!;
+const leaderboard = document.querySelector<HTMLOListElement>("#leaderboard")!;
+const inventoryElement = document.querySelector<HTMLDivElement>("#inventory")!;
+const noticeElement = document.querySelector<HTMLDivElement>("#notice")!;
 
 let myId = "";
 let latestSnapshot: Snapshot | null = null;
+let inventory: InventoryState = {
+  slots: Array<InventorySlot>(INVENTORY_SIZE).fill(null),
+  selectedSlot: 0,
+};
 let cameraX = WORLD.width / 2;
 let cameraY = WORLD.height / 2;
 let aimScreenX = VIEW_WIDTH / 2;
 let aimScreenY = VIEW_HEIGHT / 2;
 let lastInputAt = 0;
+let noticeTimeout = 0;
+let killFeedKey = "";
+let leaderboardKey = "";
 
-socket.on("welcome", ({ id }: { id: string }) => {
+function applyInventory(next: InventoryState) {
+  if (next.slots.length !== INVENTORY_SIZE) return;
+  inventory = { slots: [...next.slots], selectedSlot: next.selectedSlot };
+  renderInventory();
+}
+
+function showNotice(message: string) {
+  noticeElement.textContent = message;
+  noticeElement.hidden = false;
+  window.clearTimeout(noticeTimeout);
+  noticeTimeout = window.setTimeout(() => {
+    noticeElement.hidden = true;
+  }, 1_500);
+}
+
+function createInventory() {
+  for (let index = 0; index < INVENTORY_SIZE; index += 1) {
+    const button = document.createElement("button");
+    button.className = "inventory-slot";
+    button.type = "button";
+    button.addEventListener("click", () => selectSlot(index));
+
+    const number = document.createElement("span");
+    number.className = "slot-number";
+    number.textContent = String(index + 1);
+    const code = document.createElement("span");
+    code.className = "slot-code";
+    const name = document.createElement("span");
+    name.className = "slot-name";
+
+    button.append(number, code, name);
+    inventoryElement.append(button);
+    slotButtons.push(button);
+  }
+  renderInventory();
+}
+
+function renderInventory() {
+  for (let index = 0; index < INVENTORY_SIZE; index += 1) {
+    const button = slotButtons[index];
+    const item = inventory.slots[index];
+    const code = button.querySelector<HTMLSpanElement>(".slot-code")!;
+    const name = button.querySelector<HTMLSpanElement>(".slot-name")!;
+    button.classList.toggle("selected", inventory.selectedSlot === index);
+    button.classList.toggle("empty", item === null);
+    if (!item) {
+      code.textContent = "--";
+      name.textContent = "";
+      button.style.removeProperty("--item-color");
+      button.title = `Slot ${index + 1}: empty`;
+      continue;
+    }
+    const definition = ITEMS[item];
+    code.textContent = definition.code;
+    name.textContent = definition.label;
+    button.style.setProperty("--item-color", definition.color);
+    button.title = `Slot ${index + 1}: ${definition.label}`;
+  }
+}
+
+function selectSlot(slot: number) {
+  if (slot < 0 || slot >= INVENTORY_SIZE) return;
+  inventory = { ...inventory, selectedSlot: slot };
+  renderInventory();
+  socket.emit("selectSlot", slot);
+}
+
+function updateKillFeed(snapshot: Snapshot) {
+  const nextKey = snapshot.killFeed.map((entry) => entry.id).join(",");
+  if (nextKey === killFeedKey) return;
+  killFeedKey = nextKey;
+  killFeed.replaceChildren();
+  for (const entry of snapshot.killFeed) {
+    const row = document.createElement("li");
+    const weapon = ITEMS[entry.item];
+    row.textContent = `${entry.attacker}  ${weapon.code}  ${entry.victim}`;
+    row.style.setProperty("--weapon-color", weapon.color);
+    killFeed.append(row);
+  }
+}
+
+function updateLeaderboard(snapshot: Snapshot) {
+  const sorted = [...snapshot.players].sort((left, right) => right.kills - left.kills || left.deaths - right.deaths);
+  const nextKey = sorted.map((player) => `${player.id}:${player.kills}:${player.deaths}`).join(",");
+  if (nextKey === leaderboardKey) return;
+  leaderboardKey = nextKey;
+  leaderboard.replaceChildren();
+  for (const player of sorted.slice(0, 6)) {
+    const row = document.createElement("li");
+    const name = document.createElement("span");
+    const score = document.createElement("span");
+    name.textContent = player.id === myId ? "YOU" : player.name;
+    score.textContent = `${player.kills}-${player.deaths}`;
+    row.append(name, score);
+    leaderboard.append(row);
+  }
+}
+
+function updateHud() {
+  if (!latestSnapshot) return;
+  const mine = latestSnapshot.players.find((player) => player.id === myId);
+  playerCount.textContent = String(latestSnapshot.players.length);
+  if (!mine) return;
+  healthFill.style.width = `${mine.health}%`;
+  healthValue.textContent = String(mine.health);
+  kills.textContent = `${mine.kills} K`;
+  deaths.textContent = `${mine.deaths} D`;
+  respawn.hidden = !mine.dead;
+  const item = mine.activeItem;
+  if (!item) {
+    activeItemCode.textContent = "--";
+    activeItemName.textContent = "EMPTY";
+    weaponReady.textContent = "";
+    activeItemCode.style.removeProperty("--item-color");
+    return;
+  }
+  const weapon = ITEMS[item];
+  activeItemCode.textContent = weapon.code;
+  activeItemName.textContent = weapon.label;
+  activeItemCode.style.setProperty("--item-color", weapon.color);
+  weaponReady.textContent = mine.weaponReadyIn > 0 ? `${(mine.weaponReadyIn / 1000).toFixed(1)}S` : "READY";
+}
+
+socket.on("welcome", ({ id, inventory: nextInventory }: { id: string; inventory: InventoryState }) => {
   myId = id;
+  applyInventory(nextInventory);
   connection.textContent = "ONLINE";
 });
 
+socket.on("inventory", (nextInventory: InventoryState) => applyInventory(nextInventory));
+socket.on("notice", ({ message }: { message: string }) => showNotice(message));
 socket.on("snapshot", (snapshot: Snapshot) => {
   latestSnapshot = snapshot;
   const activeIds = new Set<string>();
@@ -61,35 +205,25 @@ socket.on("snapshot", (snapshot: Snapshot) => {
     if (!activeIds.has(id)) players.delete(id);
   }
   updateHud();
+  updateKillFeed(snapshot);
+  updateLeaderboard(snapshot);
 });
 
 socket.on("disconnect", () => {
   connection.textContent = "RECONNECTING";
 });
 
-function updateHud() {
-  if (!latestSnapshot) return;
-  const mine = latestSnapshot.players.find((player) => player.id === myId);
-  playerCount.textContent = String(latestSnapshot.players.length);
-  if (!mine) return;
-  healthFill.style.width = `${mine.health}%`;
-  healthValue.textContent = String(mine.health);
-  respawn.hidden = !mine.dead;
-}
-
 function worldPointFromEvent(event: MouseEvent) {
   const rect = canvas.getBoundingClientRect();
   aimScreenX = ((event.clientX - rect.left) / rect.width) * VIEW_WIDTH;
   aimScreenY = ((event.clientY - rect.top) / rect.height) * VIEW_HEIGHT;
-  return {
-    x: cameraX - VIEW_WIDTH / 2 + aimScreenX,
-    y: cameraY - VIEW_HEIGHT / 2 + aimScreenY,
-  };
 }
 
 window.addEventListener("keydown", (event) => {
   keys.add(event.code);
-  if (event.code === "KeyQ" && !event.repeat) socket.emit("slash");
+  if (event.code === "KeyQ" && !event.repeat) socket.emit("drop");
+  const slotMatch = event.code.match(/^(Digit|Numpad)([1-9])$/);
+  if (slotMatch && !event.repeat) selectSlot(Number(slotMatch[2]) - 1);
   if (["ArrowUp", "ArrowLeft", "ArrowRight", "Space"].includes(event.code)) event.preventDefault();
 });
 window.addEventListener("keyup", (event) => keys.delete(event.code));
@@ -97,10 +231,19 @@ window.addEventListener("blur", () => keys.clear());
 canvas.addEventListener("contextmenu", (event) => event.preventDefault());
 canvas.addEventListener("mousedown", (event) => {
   worldPointFromEvent(event);
-  if (event.button === 2) socket.emit("slash");
-  if (event.button === 0) socket.emit("shoot");
+  if (event.button === 0) socket.emit("use");
 });
 canvas.addEventListener("mousemove", worldPointFromEvent);
+canvas.addEventListener(
+  "wheel",
+  (event) => {
+    event.preventDefault();
+    const direction = Math.sign(event.deltaY);
+    if (direction === 0) return;
+    selectSlot((inventory.selectedSlot + direction + INVENTORY_SIZE) % INVENTORY_SIZE);
+  },
+  { passive: false },
+);
 
 function sendInput(now: number) {
   if (!myId || now - lastInputAt < 33) return;
@@ -125,10 +268,10 @@ function clampCamera() {
 
 function drawArena() {
   context.fillStyle = "#17252f";
-  context.fillRect(0, 0, VIEW_WIDTH, VIEW_HEIGHT);
+  context.fillRect(0, 0, WORLD.width, WORLD.height);
   context.strokeStyle = "#213640";
   context.lineWidth = 1;
-  for (let x = -80; x <= WORLD.width; x += 80) {
+  for (let x = 0; x <= WORLD.width; x += 80) {
     context.beginPath();
     context.moveTo(x, 0);
     context.lineTo(x, WORLD.height);
@@ -153,9 +296,50 @@ function drawArena() {
   }
 }
 
+function drawHeldItem(state: PlayerState) {
+  if (!state.activeItem) return;
+  const weapon = ITEMS[state.activeItem];
+  const angle = Math.atan2(state.aimY, state.aimX);
+  if (weapon.kind === "melee") {
+    context.strokeStyle = weapon.accent;
+    context.lineWidth = 4;
+    context.beginPath();
+    context.moveTo(2, 2);
+    context.lineTo(Math.cos(angle) * 35, Math.sin(angle) * 35 + 2);
+    context.stroke();
+    context.strokeStyle = weapon.color;
+    context.lineWidth = 2;
+    context.beginPath();
+    context.moveTo(2, 9);
+    context.lineTo(Math.cos(angle + Math.PI / 2) * 12, Math.sin(angle + Math.PI / 2) * 12 + 9);
+    context.stroke();
+    return;
+  }
+  if (weapon.kind === "utility") {
+    context.fillStyle = weapon.color;
+    context.fillRect(-5, -5, 14, 14);
+    context.fillStyle = weapon.accent;
+    context.fillRect(0, -3, 4, 10);
+    context.fillRect(-3, 0, 10, 4);
+    return;
+  }
+  const length = state.activeItem === "rifle" ? 33 : state.activeItem === "scattergun" ? 25 : 28;
+  context.strokeStyle = weapon.color;
+  context.lineWidth = state.activeItem === "scattergun" ? 7 : 5;
+  context.beginPath();
+  context.moveTo(2, -4);
+  context.lineTo(Math.cos(angle) * length, Math.sin(angle) * length - 4);
+  context.stroke();
+  context.strokeStyle = weapon.accent;
+  context.lineWidth = 2;
+  context.beginPath();
+  context.moveTo(Math.cos(angle) * (length - 8), Math.sin(angle) * (length - 8) - 4);
+  context.lineTo(Math.cos(angle) * length, Math.sin(angle) * length - 4);
+  context.stroke();
+}
+
 function drawPlayer(player: RenderPlayer, isLocal: boolean) {
   const { state, x, y } = player;
-  const angle = Math.atan2(state.aimY, state.aimX);
   const bodyColor = isLocal ? "#46c5d6" : "#ed6a5a";
   context.save();
   context.globalAlpha = state.dead ? 0.22 : 1;
@@ -171,23 +355,13 @@ function drawPlayer(player: RenderPlayer, isLocal: boolean) {
   context.arc(0, -24, 11, 0, Math.PI * 2);
   context.fill();
   context.stroke();
-  context.strokeStyle = "#111923";
-  context.lineWidth = 6;
-  context.beginPath();
-  context.moveTo(2, -4);
-  context.lineTo(Math.cos(angle) * 27, Math.sin(angle) * 27 - 4);
-  context.stroke();
-  context.strokeStyle = "#d6ad60";
-  context.lineWidth = 3;
-  context.beginPath();
-  context.moveTo(1, 9);
-  context.lineTo(Math.cos(angle + Math.PI / 2.4) * 25, Math.sin(angle + Math.PI / 2.4) * 25 + 9);
-  context.stroke();
+  drawHeldItem(state);
   if (state.slashUntil > 0) {
+    const angle = Math.atan2(state.aimY, state.aimX);
     context.strokeStyle = "#ffd166";
     context.lineWidth = 4;
     context.beginPath();
-    context.arc(0, 0, 48, angle - 0.85, angle + 0.85);
+    context.arc(0, 0, 52, angle - 0.85, angle + 0.85);
     context.stroke();
   }
   context.fillStyle = "#0b1217";
@@ -205,6 +379,26 @@ function drawPlayer(player: RenderPlayer, isLocal: boolean) {
   context.fillText(name, x, y - 49);
 }
 
+function drawPickup(item: InventorySlot, x: number, y: number) {
+  if (!item) return;
+  const definition = ITEMS[item];
+  context.save();
+  context.translate(x, y);
+  context.fillStyle = "rgba(11, 18, 23, 0.75)";
+  context.fillRect(-17, -17, 34, 34);
+  context.strokeStyle = definition.color;
+  context.lineWidth = 2;
+  context.strokeRect(-17, -17, 34, 34);
+  context.fillStyle = definition.color;
+  context.fillRect(-11, -11, 22, 22);
+  context.fillStyle = "#101820";
+  context.font = "bold 10px Arial, sans-serif";
+  context.textAlign = "center";
+  context.textBaseline = "middle";
+  context.fillText(definition.code, 0, 1);
+  context.restore();
+}
+
 function roundedRect(x: number, y: number, width: number, height: number, radius: number) {
   context.beginPath();
   context.roundRect(x, y, width, height, radius);
@@ -213,7 +407,8 @@ function roundedRect(x: number, y: number, width: number, height: number, radius
 function drawReticle() {
   const mine = players.get(myId);
   if (!mine || mine.state.dead) return;
-  context.strokeStyle = "rgba(233, 242, 231, 0.8)";
+  const item = mine.state.activeItem;
+  context.strokeStyle = item ? ITEMS[item].accent : "rgba(233, 242, 231, 0.8)";
   context.lineWidth = 1;
   context.beginPath();
   context.arc(aimScreenX, aimScreenY, 9, 0, Math.PI * 2);
@@ -240,10 +435,11 @@ function render(now: number) {
   context.translate(VIEW_WIDTH / 2 - cameraX, VIEW_HEIGHT / 2 - cameraY);
   drawArena();
   if (latestSnapshot) {
-    context.fillStyle = "#ffd166";
+    for (const pickup of latestSnapshot.pickups) drawPickup(pickup.item, pickup.x, pickup.y);
     for (const bullet of latestSnapshot.bullets) {
+      context.fillStyle = ITEMS[bullet.item].color;
       context.beginPath();
-      context.arc(bullet.x, bullet.y, 4, 0, Math.PI * 2);
+      context.arc(bullet.x, bullet.y, bullet.item === "plasma" ? 8 : 4, 0, Math.PI * 2);
       context.fill();
     }
   }
@@ -254,4 +450,5 @@ function render(now: number) {
   requestAnimationFrame(render);
 }
 
+createInventory();
 requestAnimationFrame(render);
