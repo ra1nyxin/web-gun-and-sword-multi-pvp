@@ -51,24 +51,24 @@ export type LightDefinition = {
 };
 
 export const LIGHTS: LightDefinition[] = [
-  { x: 220, y: 1595, radius: 240, color: "#70d6ff", kind: "lamp" },
-  { x: 430, y: 1295, radius: 280, color: "#b9f6ff", kind: "spot", angle: Math.PI / 2, spread: 0.42 },
-  { x: 700, y: 1395, radius: 200, color: "#70d6ff", kind: "lamp" },
-  { x: 970, y: 1595, radius: 240, color: "#ff9f68", kind: "lamp" },
-  { x: 1230, y: 1295, radius: 300, color: "#ffca80", kind: "spot", angle: Math.PI / 2, spread: 0.4 },
-  { x: 1510, y: 1395, radius: 190, color: "#ff9f68", kind: "lamp" },
-  { x: 1740, y: 1595, radius: 220, color: "#75b8ff", kind: "lamp" },
-  { x: 2000, y: 1120, radius: 420, color: "#b7dcff", kind: "spot", angle: Math.PI / 2, spread: 0.46 },
-  { x: 2260, y: 1595, radius: 220, color: "#75b8ff", kind: "lamp" },
-  { x: 2470, y: 1595, radius: 220, color: "#9be49a", kind: "lamp" },
-  { x: 2800, y: 1220, radius: 340, color: "#c7ffb5", kind: "spot", angle: Math.PI / 2, spread: 0.43 },
-  { x: 3130, y: 1595, radius: 210, color: "#9be49a", kind: "lamp" },
-  { x: 3300, y: 1595, radius: 220, color: "#ffd083", kind: "lamp" },
-  { x: 3650, y: 1295, radius: 320, color: "#fff0b0", kind: "spot", angle: Math.PI / 2, spread: 0.4 },
-  { x: 3930, y: 1595, radius: 190, color: "#ffd083", kind: "lamp" },
-  { x: 4110, y: 1595, radius: 210, color: "#e4adff", kind: "lamp" },
-  { x: 4400, y: 920, radius: 420, color: "#f4c6ff", kind: "spot", angle: Math.PI / 2, spread: 0.45 },
-  { x: 4690, y: 1595, radius: 200, color: "#e4adff", kind: "lamp" },
+  { x: 220, y: 1595, radius: 270, color: "#70d6ff", kind: "lamp" },
+  { x: 430, y: 1180, radius: 320, color: "#b9f6ff", kind: "spot", angle: Math.PI / 2, spread: 0.42 },
+  { x: 700, y: 1395, radius: 225, color: "#70d6ff", kind: "lamp" },
+  { x: 970, y: 1595, radius: 270, color: "#ff9f68", kind: "lamp" },
+  { x: 1230, y: 1180, radius: 340, color: "#ffca80", kind: "spot", angle: Math.PI / 2, spread: 0.4 },
+  { x: 1510, y: 1395, radius: 215, color: "#ff9f68", kind: "lamp" },
+  { x: 1740, y: 1595, radius: 245, color: "#75b8ff", kind: "lamp" },
+  { x: 2000, y: 980, radius: 470, color: "#b7dcff", kind: "spot", angle: Math.PI / 2, spread: 0.46 },
+  { x: 2260, y: 1595, radius: 245, color: "#75b8ff", kind: "lamp" },
+  { x: 2470, y: 1595, radius: 245, color: "#9be49a", kind: "lamp" },
+  { x: 2800, y: 1080, radius: 380, color: "#c7ffb5", kind: "spot", angle: Math.PI / 2, spread: 0.43 },
+  { x: 3130, y: 1595, radius: 235, color: "#9be49a", kind: "lamp" },
+  { x: 3300, y: 1595, radius: 245, color: "#ffd083", kind: "lamp" },
+  { x: 3650, y: 1180, radius: 360, color: "#fff0b0", kind: "spot", angle: Math.PI / 2, spread: 0.4 },
+  { x: 3930, y: 1595, radius: 215, color: "#ffd083", kind: "lamp" },
+  { x: 4110, y: 1595, radius: 235, color: "#e4adff", kind: "lamp" },
+  { x: 4400, y: 780, radius: 470, color: "#f4c6ff", kind: "spot", angle: Math.PI / 2, spread: 0.45 },
+  { x: 4690, y: 1595, radius: 225, color: "#e4adff", kind: "lamp" },
 ];
 
 export const PLATFORMS: PlatformDefinition[] = [
@@ -346,6 +346,7 @@ export type PickupState = {
   item: ItemId;
   x: number;
   y: number;
+  angle: number;
 };
 
 export type KillEvent = {

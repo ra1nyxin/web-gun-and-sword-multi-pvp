@@ -21,6 +21,16 @@ type BulletVisual = {
   previousY: number;
 };
 
+type PickupVisual = {
+  item: ItemId;
+  x: number;
+  y: number;
+  angle: number;
+  targetX: number;
+  targetY: number;
+  targetAngle: number;
+};
+
 type ImpactParticle = {
   x: number;
   y: number;
@@ -55,6 +65,7 @@ const lightContext = lightCanvas.getContext("2d")!;
 const socket: Socket = io({ transports: ["websocket", "polling"] });
 const players = new Map<string, RenderPlayer>();
 const bullets = new Map<string, BulletVisual>();
+const pickupVisuals = new Map<string, PickupVisual>();
 const keys = new Set<string>();
 const slotButtons: HTMLButtonElement[] = [];
 const impactParticles: ImpactParticle[] = [];
@@ -114,8 +125,9 @@ function showNotice(message: string) {
 }
 
 function renderChat() {
+  const shouldStickToBottom = chatLog.scrollHeight - chatLog.scrollTop - chatLog.clientHeight < 28;
   chatLog.replaceChildren();
-  for (const message of chatMessages.slice(-6)) {
+  for (const message of chatMessages) {
     const row = document.createElement("li");
     const sender = document.createElement("strong");
     const text = document.createElement("span");
@@ -124,6 +136,7 @@ function renderChat() {
     row.append(sender, text);
     chatLog.append(row);
   }
+  if (shouldStickToBottom) chatLog.scrollTop = chatLog.scrollHeight;
 }
 
 function receiveChat(message: ChatMessage) {
@@ -322,6 +335,40 @@ function syncBullets(snapshot: Snapshot) {
   }
 }
 
+function syncPickups(snapshot: Snapshot) {
+  const activeIds = new Set<string>();
+  for (const pickup of snapshot.pickups) {
+    activeIds.add(pickup.id);
+    const visual = pickupVisuals.get(pickup.id);
+    if (visual) {
+      visual.item = pickup.item;
+      visual.targetX = pickup.x;
+      visual.targetY = pickup.y;
+      visual.targetAngle = pickup.angle;
+      continue;
+    }
+    pickupVisuals.set(pickup.id, {
+      item: pickup.item,
+      x: pickup.x,
+      y: pickup.y,
+      angle: pickup.angle,
+      targetX: pickup.x,
+      targetY: pickup.y,
+      targetAngle: pickup.angle,
+    });
+  }
+  for (const id of pickupVisuals.keys()) {
+    if (!activeIds.has(id)) pickupVisuals.delete(id);
+  }
+}
+
+function approachAngle(current: number, target: number, amount: number) {
+  let delta = target - current;
+  while (delta <= -Math.PI) delta += Math.PI * 2;
+  while (delta > Math.PI) delta -= Math.PI * 2;
+  return current + delta * amount;
+}
+
 function updateVisualEffects(now: number) {
   const delta = lastRenderAt === 0 ? 16 : Math.min(40, Math.max(1, now - lastRenderAt));
   lastRenderAt = now;
@@ -330,6 +377,11 @@ function updateVisualEffects(now: number) {
     visual.previousY = visual.y;
     visual.x += (visual.targetX - visual.x) * 0.52;
     visual.y += (visual.targetY - visual.y) * 0.52;
+  }
+  for (const pickup of pickupVisuals.values()) {
+    pickup.x += (pickup.targetX - pickup.x) * 0.48;
+    pickup.y += (pickup.targetY - pickup.y) * 0.48;
+    pickup.angle = approachAngle(pickup.angle, pickup.targetAngle, 0.5);
   }
   for (let index = impactParticles.length - 1; index >= 0; index -= 1) {
     const particle = impactParticles[index];
@@ -361,6 +413,7 @@ socket.on("impact", (impact: ImpactEvent) => {
 socket.on("chatHistory", (history: ChatMessage[]) => {
   chatMessages = history.slice(-60);
   renderChat();
+  chatLog.scrollTop = chatLog.scrollHeight;
 });
 socket.on("chat", (message: ChatMessage) => receiveChat(message));
 socket.on("snapshot", (snapshot: Snapshot) => {
@@ -387,6 +440,7 @@ socket.on("snapshot", (snapshot: Snapshot) => {
     if (!activeIds.has(id)) players.delete(id);
   }
   syncBullets(snapshot);
+  syncPickups(snapshot);
   updateHud();
   updateKillFeed(snapshot);
   updateLeaderboard(snapshot);
@@ -849,20 +903,33 @@ function drawPlayer(player: RenderPlayer, isLocal: boolean) {
   context.fillText(name, x, y - 49);
 }
 
-function drawPickup(item: InventorySlot, x: number, y: number) {
+function drawPickup(item: InventorySlot, x: number, y: number, angle: number) {
   if (!item) return;
   const definition = ITEMS[item];
   context.save();
+  context.fillStyle = "rgba(0, 0, 0, 0.32)";
+  context.beginPath();
+  context.ellipse(x, y + 19, 19, 5, 0, 0, Math.PI * 2);
+  context.fill();
   context.translate(x, y);
+  context.rotate(angle);
   context.fillStyle = "rgba(11, 18, 23, 0.75)";
-  context.fillRect(-17, -17, 34, 34);
+  context.fillRect(-16, -16, 32, 32);
   context.strokeStyle = definition.color;
-  context.lineWidth = 2;
-  context.strokeRect(-17, -17, 34, 34);
-  context.fillStyle = definition.color;
-  context.fillRect(-11, -11, 22, 22);
+  context.lineWidth = 2.5;
+  context.strokeRect(-16, -16, 32, 32);
+  context.fillStyle = rgba(definition.color, 0.76);
+  context.fillRect(-12, -12, 24, 24);
+  context.strokeStyle = rgba(definition.accent, 0.9);
+  context.lineWidth = 1.5;
+  context.beginPath();
+  context.moveTo(-12, -4);
+  context.lineTo(12, -4);
+  context.moveTo(-12, 4);
+  context.lineTo(12, 4);
+  context.stroke();
   context.fillStyle = "#101820";
-  context.font = "bold 10px Arial, sans-serif";
+  context.font = "bold 11px Arial, sans-serif";
   context.textAlign = "center";
   context.textBaseline = "middle";
   context.fillText(definition.code, 0, 1);
@@ -906,9 +973,7 @@ function render(now: number) {
   context.translate(VIEW_WIDTH / 2 - cameraX, VIEW_HEIGHT / 2 - cameraY);
   drawArena();
   drawLightFixtures();
-  if (latestSnapshot) {
-    for (const pickup of latestSnapshot.pickups) drawPickup(pickup.item, pickup.x, pickup.y);
-  }
+  for (const pickup of pickupVisuals.values()) drawPickup(pickup.item, pickup.x, pickup.y, pickup.angle);
   for (const [id, player] of players) drawPlayer(player, id === myId);
   drawLighting();
   drawBullets();

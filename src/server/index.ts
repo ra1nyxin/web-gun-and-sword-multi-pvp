@@ -80,16 +80,17 @@ type Bullet = {
 type Pickup = {
   id: string;
   item: ItemId;
-  x: number;
-  y: number;
+  body: Matter.Body;
   expiresAt: number;
   protectedOwnerId: string | null;
   ownerProtectionUntil: number;
+  isWorld: boolean;
 };
 
 const players = new Map<string, Player>();
 const bullets = new Map<string, Bullet>();
 const pickups = new Map<string, Pickup>();
+const MAX_PICKUPS_PER_ITEM = 10;
 const killFeed: KillEvent[] = [];
 const chatMessages: ChatMessage[] = [];
 const lootCycle: ItemId[] = ["scattergun", "plasma", "medkit", "rifle", "sword", "pistol"];
@@ -151,7 +152,7 @@ function sanitizeChat(candidate: unknown) {
     .replace(/\s+/gu, " ")
     .trim();
   if (!normalized) return null;
-  return Array.from(normalized).slice(0, 120).join("");
+  return Array.from(normalized).slice(0, 240).join("");
 }
 
 function sendChat(player: Player, candidate: unknown, now: number) {
@@ -272,32 +273,60 @@ function removeBullet(id: string, shouldImpact = false) {
 }
 
 function removePickup(id: string) {
+  const pickup = pickups.get(id);
+  if (!pickup) return;
+  World.remove(engine.world, pickup.body);
   pickups.delete(id);
 }
+
+type PickupSpawnOptions = {
+  protectedOwnerId?: string | null;
+  ownerProtectionMs?: number;
+  isWorld?: boolean;
+  velocity?: { x: number; y: number };
+  angularVelocity?: number;
+};
 
 function spawnPickup(
   item: ItemId,
   x: number,
   y: number,
   now: number,
-  protectedOwnerId: string | null = null,
-  ownerProtectionMs = 0,
+  options: PickupSpawnOptions = {},
 ) {
+  const itemCount = [...pickups.values()].filter((pickup) => pickup.item === item).length;
+  if (itemCount >= MAX_PICKUPS_PER_ITEM) return null;
+
   pickupSequence += 1;
+  const spawnX = Math.max(35, Math.min(WORLD.width - 35, x));
+  const spawnY = Math.max(40, Math.min(WORLD.height - 60, y));
+  const body = Bodies.rectangle(spawnX, spawnY, 30, 30, {
+    density: 0.001,
+    friction: 0.72,
+    frictionAir: 0.018,
+    restitution: 0.22,
+    label: "pickup",
+  });
+  Body.setAngle(body, Math.random() * Math.PI * 2);
+  if (options.velocity) Body.setVelocity(body, options.velocity);
+  if (options.angularVelocity !== undefined) Body.setAngularVelocity(body, options.angularVelocity);
+  World.add(engine.world, body);
   const pickup: Pickup = {
     id: `i${pickupSequence}`,
     item,
-    x: Math.max(35, Math.min(WORLD.width - 35, x)),
-    y: Math.max(40, Math.min(WORLD.height - 60, y)),
+    body,
     expiresAt: now + 90_000,
-    protectedOwnerId,
-    ownerProtectionUntil: now + ownerProtectionMs,
+    protectedOwnerId: options.protectedOwnerId ?? null,
+    ownerProtectionUntil: now + (options.ownerProtectionMs ?? 0),
+    isWorld: options.isWorld ?? false,
   };
   pickups.set(pickup.id, pickup);
+  return pickup;
 }
 
 function spawnWorldLoot(now: number) {
-  if (pickups.size >= LOOT_SPAWNS.length) return;
+  const worldPickupCount = [...pickups.values()].filter((pickup) => pickup.isWorld).length;
+  if (worldPickupCount >= LOOT_SPAWNS.length) return;
   const cycleIndex = lootSequence % LOOT_SPAWNS.length;
   const zoneIndex = cycleIndex % ZONES.length;
   const tier = Math.floor(cycleIndex / ZONES.length);
@@ -305,7 +334,7 @@ function spawnWorldLoot(now: number) {
   const point = LOOT_SPAWNS[zoneIndex * lootPerZone + tier];
   const item = lootCycle[lootSequence % lootCycle.length];
   lootSequence += 1;
-  spawnPickup(item, point.x, point.y, now);
+  spawnPickup(item, point.x, point.y, now, { isWorld: true });
 }
 
 function shootProjectile(player: Player, item: ItemId, now: number) {
@@ -390,15 +419,26 @@ function dropSelectedItem(player: Player, now: number) {
     return;
   }
   const aim = normalizeAim(player.input);
-  player.inventory[player.selectedSlot] = null;
-  spawnPickup(
+  const pickup = spawnPickup(
     item,
     player.body.position.x + aim.x * 58,
     player.body.position.y + aim.y * 10 - 8,
     now,
-    player.id,
-    700,
+    {
+      protectedOwnerId: player.id,
+      ownerProtectionMs: 700,
+      velocity: {
+        x: player.body.velocity.x * 0.45 + aim.x * 8.2,
+        y: player.body.velocity.y * 0.25 + aim.y * 3.2 - 5.2,
+      },
+      angularVelocity: (Math.random() - 0.5) * 0.34,
+    },
   );
+  if (!pickup) {
+    notice(player, `${ITEMS[item].label}箱子已达到场上上限`, now);
+    return;
+  }
+  player.inventory[player.selectedSlot] = null;
   syncInventory(player);
   notice(player, `已丢弃 ${ITEMS[item].label}`, now);
 }
@@ -460,7 +500,7 @@ function resolvePickups(now: number) {
     for (const player of players.values()) {
       if (player.dead) continue;
       if (pickup.protectedOwnerId === player.id && pickup.ownerProtectionUntil > now) continue;
-      if (Math.hypot(player.body.position.x - pickup.x, player.body.position.y - pickup.y) > 42) continue;
+      if (Math.hypot(player.body.position.x - pickup.body.position.x, player.body.position.y - pickup.body.position.y) > 42) continue;
       const emptySlot = player.inventory.findIndex((slot) => slot === null);
       if (emptySlot === -1) {
         notice(player, "背包已满", now);
@@ -499,8 +539,9 @@ function snapshot(now: number): Snapshot {
     pickups: [...pickups.values()].map((pickup) => ({
       id: pickup.id,
       item: pickup.item,
-      x: pickup.x,
-      y: pickup.y,
+      x: pickup.body.position.x,
+      y: pickup.body.position.y,
+      angle: pickup.body.angle,
     })),
     killFeed: [...killFeed],
   };
