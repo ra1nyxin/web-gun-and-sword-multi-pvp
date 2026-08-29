@@ -126,7 +126,6 @@ const leaderboard = document.querySelector<HTMLOListElement>("#leaderboard")!;
 const inventoryElement = document.querySelector<HTMLDivElement>("#inventory")!;
 const noticeElement = document.querySelector<HTMLDivElement>("#notice")!;
 const chatPanel = document.querySelector<HTMLElement>("#chat-panel")!;
-const chatOpenButton = document.querySelector<HTMLButtonElement>("#chat-open")!;
 const chatLog = document.querySelector<HTMLOListElement>("#chat-log")!;
 const chatForm = document.querySelector<HTMLFormElement>("#chat-form")!;
 const chatInput = document.querySelector<HTMLInputElement>("#chat-input")!;
@@ -692,7 +691,6 @@ nameInput.addEventListener("input", () => {
   nameInput.value = Array.from(nameInput.value).slice(0, 16).join("");
 });
 nameInput.addEventListener("keydown", (event) => event.stopPropagation());
-chatOpenButton.addEventListener("click", openChat);
 canvas.addEventListener("contextmenu", (event) => event.preventDefault());
 canvas.addEventListener("mousedown", (event) => {
   try {
