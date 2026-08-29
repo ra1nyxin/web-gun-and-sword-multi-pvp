@@ -495,7 +495,8 @@ function navigationGoal(bot: Player, target: Player, brain: BotBrain) {
     brain.navigationIndex += 1;
   }
   const destinationX = Math.max(next.left + 18, Math.min(next.right - 18, target.body.position.x));
-  return { x: destinationX, jump: next.top < current.top - 25 };
+  const horizontalGap = Math.max(current.left - next.right, next.left - current.right, 0);
+  return { x: destinationX, jump: next.top < current.top - 25 || horizontalGap > 10 };
 }
 
 function updateBotAI(bot: Player, now: number) {
