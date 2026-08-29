@@ -1029,6 +1029,7 @@ function drawBullets() {
 function drawCasings() {
   context.save();
   for (const casing of casings) {
+    context.save();
     const alpha = Math.min(1, casing.life / 180);
     context.globalAlpha = alpha;
     context.translate(casing.x, casing.y);
@@ -1038,7 +1039,7 @@ function drawCasings() {
     context.strokeStyle = casing.color;
     context.lineWidth = 0.8;
     context.strokeRect(-3.5, -1.5, 7, 3);
-    context.setTransform(1, 0, 0, 1, 0, 0);
+    context.restore();
   }
   context.restore();
 }
