@@ -686,6 +686,38 @@ function drawShadowPolygon(
   target.fill();
 }
 
+function drawSpotPlatformShadow(
+  target: CanvasRenderingContext2D,
+  sourceX: number,
+  sourceY: number,
+  light: (typeof LIGHTS)[number],
+  platform: (typeof PLATFORMS)[number],
+  left: number,
+  top: number,
+) {
+  const angle = light.angle ?? Math.PI / 2;
+  const verticalDirection = Math.sin(angle);
+  if (verticalDirection <= 0.05) return;
+  const sourceWorldY = top + sourceY;
+  const platformBottomWorld = platform.y + platform.height / 2;
+  if (platformBottomWorld <= sourceWorldY + 1) return;
+  const startY = platformBottomWorld - top;
+  const startLeft = platform.x - platform.width / 2 - left;
+  const startRight = platform.x + platform.width / 2 - left;
+  const farY = VIEW_HEIGHT + Math.max(120, light.radius);
+  const scale = (farY - sourceY) / Math.max(1, startY - sourceY);
+  if (scale <= 1) return;
+  const farLeft = sourceX + (startLeft - sourceX) * scale;
+  const farRight = sourceX + (startRight - sourceX) * scale;
+  target.beginPath();
+  target.moveTo(startLeft, startY);
+  target.lineTo(startRight, startY);
+  target.lineTo(farRight, farY);
+  target.lineTo(farLeft, farY);
+  target.closePath();
+  target.fill();
+}
+
 function drawLighting() {
   const left = cameraX - VIEW_WIDTH / 2;
   const top = cameraY - VIEW_HEIGHT / 2;
@@ -741,6 +773,9 @@ function drawLighting() {
         top: platformTop,
         bottom: platformTop + platform.height,
       });
+      if (light.kind === "spot") {
+        drawSpotPlatformShadow(lightContext, sourceX, sourceY, light, platform, left, top);
+      }
     }
     for (const player of players.values()) {
       if (player.state.dead) continue;
@@ -749,6 +784,14 @@ function drawLighting() {
         right: player.x + 20 - left,
         top: player.y - 36 - top,
         bottom: player.y + 22 - top,
+      });
+    }
+    for (const pickup of pickupVisuals.values()) {
+      drawShadowPolygon(lightContext, sourceX, sourceY, light.radius, {
+        left: pickup.x - 18 - left,
+        right: pickup.x + 18 - left,
+        top: pickup.y - 18 - top,
+        bottom: pickup.y + 18 - top,
       });
     }
     lightingContext.globalCompositeOperation = "lighter";

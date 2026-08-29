@@ -50,6 +50,14 @@ const terrain = PLATFORMS.map((platform) =>
 );
 World.add(engine.world, terrain);
 
+type BotBrain = {
+  targetId: string | null;
+  nextThinkAt: number;
+  nextAttackAt: number;
+  nextJumpAt: number;
+  strafeDirection: number;
+};
+
 type Player = {
   id: string;
   name: string;
@@ -67,6 +75,8 @@ type Player = {
   swingHits: Set<string>;
   lastNoticeAt: number;
   lastChatAt: number;
+  isBot: boolean;
+  bot: BotBrain | null;
 };
 
 type Bullet = {
@@ -81,7 +91,6 @@ type Pickup = {
   id: string;
   item: ItemId;
   body: Matter.Body;
-  expiresAt: number;
   protectedOwnerId: string | null;
   ownerProtectionUntil: number;
   isWorld: boolean;
@@ -183,6 +192,148 @@ function normalizeAim(input: InputState) {
   return { x: input.aimX / length, y: input.aimY / length };
 }
 
+function findBotTarget(bot: Player) {
+  return [...players.values()]
+    .filter((candidate) => candidate.id !== bot.id && !candidate.dead)
+    .sort((left, right) => {
+      const leftDistance = Math.hypot(left.body.position.x - bot.body.position.x, left.body.position.y - bot.body.position.y);
+      const rightDistance = Math.hypot(right.body.position.x - bot.body.position.x, right.body.position.y - bot.body.position.y);
+      return leftDistance - rightDistance;
+    })[0] ?? null;
+}
+
+function incomingBulletDodge(bot: Player) {
+  let closestDistance = Infinity;
+  let dodgeDirection = 0;
+  for (const bullet of bullets.values()) {
+    if (bullet.ownerId === bot.id) continue;
+    const velocity = bullet.body.velocity;
+    const speedSquared = velocity.x * velocity.x + velocity.y * velocity.y;
+    if (speedSquared < 0.01) continue;
+    const offsetX = bot.body.position.x - bullet.body.position.x;
+    const offsetY = bot.body.position.y - bullet.body.position.y;
+    const projectedTime = Math.max(0, Math.min(12, (offsetX * velocity.x + offsetY * velocity.y) / speedSquared));
+    const closestX = bullet.body.position.x + velocity.x * projectedTime;
+    const closestY = bullet.body.position.y + velocity.y * projectedTime;
+    const distance = Math.hypot(bot.body.position.x - closestX, bot.body.position.y - closestY);
+    if (distance > 68 || distance >= closestDistance) continue;
+    closestDistance = distance;
+    const perpendicularX = -velocity.y;
+    const perpendicularY = velocity.x;
+    const side = offsetX * perpendicularX + offsetY * perpendicularY;
+    const awayX = side >= 0 ? perpendicularX : -perpendicularX;
+    dodgeDirection = Math.sign(awayX) || bot.bot?.strafeDirection || 1;
+  }
+  return dodgeDirection || null;
+}
+
+function botWeaponSlot(bot: Player, distance: number) {
+  if (bot.health <= 42) {
+    const medkitSlot = bot.inventory.indexOf("medkit");
+    if (medkitSlot !== -1) return medkitSlot;
+  }
+  if (distance <= 92) {
+    const swordSlot = bot.inventory.indexOf("sword");
+    if (swordSlot !== -1) return swordSlot;
+  }
+  if (distance <= 310) {
+    const scattergunSlot = bot.inventory.indexOf("scattergun");
+    if (scattergunSlot !== -1) return scattergunSlot;
+  }
+  const rifleSlot = bot.inventory.indexOf("rifle");
+  if (rifleSlot !== -1) return rifleSlot;
+  const pistolSlot = bot.inventory.indexOf("pistol");
+  if (pistolSlot !== -1) return pistolSlot;
+  return bot.inventory.findIndex((item) => item !== null);
+}
+
+function updateBotAI(bot: Player, now: number) {
+  const brain = bot.bot;
+  if (!brain || bot.dead) return;
+  bot.input.jump = false;
+  if (now >= brain.nextThinkAt || !brain.targetId || players.get(brain.targetId)?.dead) {
+    brain.targetId = findBotTarget(bot)?.id ?? null;
+    brain.nextThinkAt = now + 180 + Math.random() * 160;
+    if (Math.random() < 0.35) brain.strafeDirection *= -1;
+  }
+
+  const target = brain.targetId ? players.get(brain.targetId) ?? null : null;
+  const dodgeDirection = incomingBulletDodge(bot);
+  let moveDirection = dodgeDirection ?? brain.strafeDirection;
+  if (target) {
+    const dx = target.body.position.x - bot.body.position.x;
+    const dy = target.body.position.y - bot.body.position.y;
+    const distance = Math.hypot(dx, dy);
+    const prediction = Math.min(14, distance / 20);
+    bot.input.aimX = target.body.position.x + target.body.velocity.x * prediction - bot.body.position.x;
+    bot.input.aimY = target.body.position.y + target.body.velocity.y * prediction - bot.body.position.y;
+    if (dodgeDirection === null) {
+      if (distance > 125) moveDirection = Math.sign(dx) || brain.strafeDirection;
+      else if (distance < 70) moveDirection = -Math.sign(dx) || brain.strafeDirection;
+    }
+    const weaponSlot = botWeaponSlot(bot, distance);
+    if (weaponSlot >= 0) {
+      bot.selectedSlot = weaponSlot;
+      if (now >= brain.nextAttackAt) {
+        useSelectedItem(bot, now);
+        brain.nextAttackAt = now + 70 + Math.random() * 90;
+      }
+    }
+    if (isGrounded(bot) && now >= brain.nextJumpAt && (dy < -58 || dodgeDirection !== null || Math.abs(dx) > 220)) {
+      bot.input.jump = true;
+      brain.nextJumpAt = now + 700 + Math.random() * 850;
+    }
+  } else {
+    bot.input.aimX = brain.strafeDirection;
+    bot.input.aimY = 0;
+    if (now >= brain.nextJumpAt && isGrounded(bot) && Math.random() < 0.02) {
+      bot.input.jump = true;
+      brain.nextJumpAt = now + 900;
+    }
+  }
+  if (bot.body.position.x < 80) moveDirection = 1;
+  if (bot.body.position.x > WORLD.width - 80) moveDirection = -1;
+  bot.input.left = moveDirection < 0;
+  bot.input.right = moveDirection > 0;
+}
+
+function createBot(id: string, name: string, spawn: { x: number; y: number }) {
+  const bot: Player = {
+    id,
+    name,
+    body: Bodies.rectangle(spawn.x, spawn.y, WORLD.playerWidth, WORLD.playerHeight, {
+      friction: 0,
+      frictionAir: 0.04,
+      restitution: 0,
+      label: "player",
+      inertia: Infinity,
+    }),
+    input: emptyInput(),
+    inventory: ["rifle", "scattergun", "sword", "pistol", "medkit", null, null, null, null],
+    selectedSlot: 0,
+    cooldowns: emptyCooldowns(),
+    health: WORLD.maxHealth,
+    kills: 0,
+    deaths: 0,
+    dead: false,
+    respawnAt: 0,
+    slashUntil: 0,
+    swingHits: new Set(),
+    lastNoticeAt: 0,
+    lastChatAt: 0,
+    isBot: true,
+    bot: {
+      targetId: null,
+      nextThinkAt: 0,
+      nextAttackAt: 0,
+      nextJumpAt: 0,
+      strafeDirection: Math.random() < 0.5 ? -1 : 1,
+    },
+  };
+  players.set(id, bot);
+  World.add(engine.world, bot.body);
+}
+
 function playerState(player: Player, now: number): PlayerState {
   const aim = normalizeAim(player.input);
   const item = activeItem(player);
@@ -210,12 +361,18 @@ function playerState(player: Player, now: number): PlayerState {
 function isGrounded(player: Player) {
   const bounds = player.body.bounds;
   const feetY = bounds.max.y;
-  return PLATFORMS.some((platform) => {
+  const groundedOnTerrain = PLATFORMS.some((platform) => {
     const top = platform.y - platform.height / 2;
     const left = platform.x - platform.width / 2;
     const right = platform.x + platform.width / 2;
     const overlapsX = bounds.max.x > left + 4 && bounds.min.x < right - 4;
     return overlapsX && feetY >= top - 6 && feetY <= top + 10 && player.body.velocity.y >= -1;
+  });
+  if (groundedOnTerrain) return true;
+  return [...pickups.values()].some((pickup) => {
+    const pickupBounds = pickup.body.bounds;
+    const overlapsX = bounds.max.x > pickupBounds.min.x + 4 && bounds.min.x < pickupBounds.max.x - 4;
+    return overlapsX && feetY >= pickupBounds.min.y - 7 && feetY <= pickupBounds.min.y + 11 && player.body.velocity.y >= -1;
   });
 }
 
@@ -315,7 +472,6 @@ function spawnPickup(
     id: `i${pickupSequence}`,
     item,
     body,
-    expiresAt: now + 90_000,
     protectedOwnerId: options.protectedOwnerId ?? null,
     ownerProtectionUntil: now + (options.ownerProtectionMs ?? 0),
     isWorld: options.isWorld ?? false,
@@ -493,10 +649,6 @@ function resolveBullets(now: number) {
 
 function resolvePickups(now: number) {
   for (const pickup of [...pickups.values()]) {
-    if (pickup.expiresAt <= now) {
-      removePickup(pickup.id);
-      continue;
-    }
     for (const player of players.values()) {
       if (player.dead) continue;
       if (pickup.protectedOwnerId === player.id && pickup.ownerProtectionUntil > now) continue;
@@ -547,6 +699,9 @@ function snapshot(now: number): Snapshot {
   };
 }
 
+createBot("ai-1", "AI·猎手 1", SPAWNS[2]);
+createBot("ai-2", "AI·猎手 2", SPAWNS[9]);
+
 for (let index = 0; index < Math.min(18, LOOT_SPAWNS.length); index += 1) spawnWorldLoot(Date.now());
 
 io.on("connection", (socket) => {
@@ -575,6 +730,8 @@ io.on("connection", (socket) => {
     swingHits: new Set(),
     lastNoticeAt: 0,
     lastChatAt: 0,
+    isBot: false,
+    bot: null,
   };
   players.set(socket.id, player);
   World.add(engine.world, player.body);
@@ -604,6 +761,7 @@ setInterval(() => {
   const now = Date.now();
   for (const player of players.values()) {
     if (player.dead && player.respawnAt <= now) respawn(player);
+    if (player.isBot) updateBotAI(player, now);
     updatePlayerMovement(player);
   }
   Engine.update(engine, 1000 / 60);
