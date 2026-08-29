@@ -16,6 +16,11 @@
         </div>
         <div id="active-item"><span id="active-item-code">手</span><strong id="active-item-name">手枪</strong><span id="weapon-ready">就绪</span></div>
         <div id="player-stats"><span id="kills">击败 0</span><span id="deaths">倒下 0</span></div>
+        <form id="name-form" autocomplete="off">
+          <label for="name-input">昵称</label>
+          <input id="name-input" maxlength="16" autocomplete="nickname" placeholder="输入昵称" aria-label="玩家昵称" />
+          <button type="submit">保存</button>
+        </form>
       </div>
       <div id="score"><span id="player-count">1</span><span id="connection">连接中</span></div>
       <ol id="kill-feed" aria-live="polite"></ol>

@@ -65,12 +65,48 @@ const elevatorBodies = ELEVATORS.map((elevator) =>
 World.add(engine.world, elevatorBodies);
 const solidTerrain = [...terrain, ...elevatorBodies];
 
+type NavigationSurface = {
+  id: string;
+  x: number;
+  top: number;
+  width: number;
+  left: number;
+  right: number;
+};
+
+const staticNavigationSurfaces: NavigationSurface[] = PLATFORMS
+  .map((platform, index) => ({
+    id: `platform:${index}`,
+    x: platform.x,
+    top: platform.y - platform.height / 2,
+    width: platform.width,
+    left: platform.x - platform.width / 2,
+    right: platform.x + platform.width / 2,
+  }))
+  .filter((surface) => surface.width >= 40);
+
+function navigationSurfaces(): NavigationSurface[] {
+  return [
+    ...staticNavigationSurfaces,
+    ...elevatorBodies.map((body, index) => ({
+      id: `elevator:${ELEVATORS[index].id}`,
+      x: body.position.x,
+      top: body.bounds.min.y,
+      width: ELEVATORS[index].width,
+      left: body.bounds.min.x,
+      right: body.bounds.max.x,
+    })),
+  ];
+}
+
 type BotBrain = {
   targetId: string | null;
   nextThinkAt: number;
   nextAttackAt: number;
   nextJumpAt: number;
   strafeDirection: number;
+  navigationRoute: string[];
+  navigationIndex: number;
 };
 
 type Player = {
@@ -205,6 +241,28 @@ function sanitizeChat(candidate: unknown) {
     .trim();
   if (!normalized) return null;
   return Array.from(normalized).slice(0, 240).join("");
+}
+
+function sanitizePlayerName(candidate: unknown) {
+  if (typeof candidate !== "string") return null;
+  const normalized = candidate
+    .normalize("NFC")
+    .replace(/[\u0000-\u001f\u007f]/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
+  if (!normalized) return null;
+  return Array.from(normalized).slice(0, 16).join("");
+}
+
+function setPlayerName(player: Player, candidate: unknown, now: number) {
+  const name = sanitizePlayerName(candidate);
+  if (!name) {
+    notice(player, "昵称不能为空", now);
+    return;
+  }
+  player.name = name;
+  io.to(player.id).emit("name", { name });
+  notice(player, "昵称已更新", now);
 }
 
 function sendChat(player: Player, candidate: unknown, now: number) {
@@ -356,6 +414,90 @@ function botWeaponSlot(bot: Player, distance: number) {
   return bot.inventory.findIndex((item) => item !== null);
 }
 
+function surfaceForPlayer(player: Player, surfaces: NavigationSurface[]) {
+  const feet = player.body.bounds.max.y;
+  let best: NavigationSurface | null = null;
+  let bestScore = Infinity;
+  for (const surface of surfaces) {
+    const overlapsX = player.body.bounds.max.x > surface.left - 8 && player.body.bounds.min.x < surface.right + 8;
+    const verticalDistance = Math.abs(feet - surface.top);
+    if (!overlapsX || verticalDistance > 34) continue;
+    const score = verticalDistance + Math.abs(player.body.position.x - surface.x) * 0.008;
+    if (score < bestScore) {
+      best = surface;
+      bestScore = score;
+    }
+  }
+  return best;
+}
+
+function nearestSurfaceForPlayer(player: Player, surfaces: NavigationSurface[]) {
+  return surfaces.reduce<NavigationSurface | null>((best, surface) => {
+    if (!best) return surface;
+    const bestScore = Math.abs(player.body.position.y - best.top) + Math.abs(player.body.position.x - best.x) * 0.18;
+    const score = Math.abs(player.body.position.y - surface.top) + Math.abs(player.body.position.x - surface.x) * 0.18;
+    return score < bestScore ? surface : best;
+  }, null);
+}
+
+function surfaceReachable(from: NavigationSurface, to: NavigationSurface) {
+  const verticalGap = Math.abs(to.top - from.top);
+  if (verticalGap > 175) return false;
+  const horizontalGap = Math.max(from.left - to.right, to.left - from.right, 0);
+  return horizontalGap <= 245 || verticalGap <= 68;
+}
+
+function findNavigationRoute(bot: Player, target: Player) {
+  const surfaces = navigationSurfaces();
+  const current = surfaceForPlayer(bot, surfaces) ?? nearestSurfaceForPlayer(bot, surfaces);
+  const destination = surfaceForPlayer(target, surfaces) ?? nearestSurfaceForPlayer(target, surfaces);
+  if (!current || !destination || current.id === destination.id) return [];
+
+  const queue = [current.id];
+  const previous = new Map<string, string | null>([[current.id, null]]);
+  while (queue.length > 0) {
+    const id = queue.shift()!;
+    if (id === destination.id) break;
+    const from = surfaces.find((surface) => surface.id === id);
+    if (!from) continue;
+    for (const to of surfaces) {
+      if (to.id === from.id || previous.has(to.id) || !surfaceReachable(from, to)) continue;
+      previous.set(to.id, from.id);
+      queue.push(to.id);
+    }
+  }
+  if (!previous.has(destination.id)) return [];
+  const route: string[] = [];
+  let cursor: string | null = destination.id;
+  while (cursor) {
+    route.unshift(cursor);
+    cursor = previous.get(cursor) ?? null;
+  }
+  return route;
+}
+
+function navigationGoal(bot: Player, target: Player, brain: BotBrain) {
+  const surfaces = navigationSurfaces();
+  const current = surfaceForPlayer(bot, surfaces);
+  if (!current) return null;
+  const targetSurface = surfaceForPlayer(target, surfaces) ?? nearestSurfaceForPlayer(target, surfaces);
+  if (!targetSurface || targetSurface.id === current.id) return null;
+  const currentRouteId = brain.navigationRoute[brain.navigationIndex];
+  if (currentRouteId !== current.id || brain.navigationIndex >= brain.navigationRoute.length - 1) {
+    brain.navigationRoute = findNavigationRoute(bot, target);
+    brain.navigationIndex = brain.navigationRoute[0] === current.id ? 0 : -1;
+  }
+  if (brain.navigationIndex < 0 || brain.navigationIndex >= brain.navigationRoute.length - 1) return null;
+  const nextId = brain.navigationRoute[brain.navigationIndex + 1];
+  const next = surfaces.find((surface) => surface.id === nextId);
+  if (!next) return null;
+  if (bot.body.bounds.max.x >= next.left - 18 && bot.body.bounds.min.x <= next.right + 18 && Math.abs(bot.body.bounds.max.y - next.top) < 28) {
+    brain.navigationIndex += 1;
+  }
+  const destinationX = Math.max(next.left + 18, Math.min(next.right - 18, target.body.position.x));
+  return { x: destinationX, jump: next.top < current.top - 25 };
+}
+
 function updateBotAI(bot: Player, now: number) {
   const brain = bot.bot;
   if (!brain || bot.dead) return;
@@ -364,6 +506,8 @@ function updateBotAI(bot: Player, now: number) {
     brain.targetId = findBotTarget(bot)?.id ?? null;
     brain.nextThinkAt = now + 180 + Math.random() * 160;
     if (Math.random() < 0.35) brain.strafeDirection *= -1;
+    brain.navigationRoute = [];
+    brain.navigationIndex = 0;
   }
 
   const target = brain.targetId ? players.get(brain.targetId) ?? null : null;
@@ -374,11 +518,13 @@ function updateBotAI(bot: Player, now: number) {
     const dy = target.body.position.y - bot.body.position.y;
     const distance = Math.hypot(dx, dy);
     const visible = hasLineOfSight(bot, target);
+    const navigation = navigationGoal(bot, target, brain);
     const prediction = Math.min(14, distance / 20);
     bot.input.aimX = target.body.position.x + target.body.velocity.x * prediction - bot.body.position.x;
     bot.input.aimY = target.body.position.y + target.body.velocity.y * prediction - bot.body.position.y;
     if (dodgeDirection === null) {
       if (bot.health < 35 && bot.inventory.indexOf("medkit") === -1) moveDirection = -Math.sign(dx) || brain.strafeDirection;
+      else if (navigation) moveDirection = Math.sign(navigation.x - bot.body.position.x) || brain.strafeDirection;
       else if (!visible || distance > 125) moveDirection = Math.sign(dx) || brain.strafeDirection;
       else if (distance < 70) moveDirection = -Math.sign(dx) || brain.strafeDirection;
     }
@@ -390,7 +536,7 @@ function updateBotAI(bot: Player, now: number) {
         brain.nextAttackAt = now + 70 + Math.random() * 90;
       }
     }
-    if (isGrounded(bot) && now >= brain.nextJumpAt && (dy < -58 || dodgeDirection !== null || Math.abs(dx) > 220)) {
+    if (isGrounded(bot) && now >= brain.nextJumpAt && (navigation?.jump || dy < -58 || dodgeDirection !== null || Math.abs(dx) > 220)) {
       bot.input.jump = true;
       brain.nextJumpAt = now + 700 + Math.random() * 850;
     }
@@ -441,6 +587,8 @@ function createBot(id: string, name: string, spawn: { x: number; y: number }) {
       nextAttackAt: 0,
       nextJumpAt: 0,
       strafeDirection: Math.random() < 0.5 ? -1 : 1,
+      navigationRoute: [],
+      navigationIndex: 0,
     },
   };
   players.set(id, bot);
@@ -941,7 +1089,7 @@ io.on("connection", (socket) => {
   };
   players.set(socket.id, player);
   World.add(engine.world, player.body);
-  socket.emit("welcome", { id: socket.id, inventory: inventoryState(player) });
+  socket.emit("welcome", { id: socket.id, name: player.name, inventory: inventoryState(player) });
   socket.emit("chatHistory", chatMessages);
 
   socket.on("input", (candidate: Partial<InputState>) => {
@@ -957,6 +1105,7 @@ io.on("connection", (socket) => {
   socket.on("shoot", () => useSelectedItem(player, Date.now()));
   socket.on("slash", () => useLegacySword(player, Date.now()));
   socket.on("chat", (message: unknown) => sendChat(player, message, Date.now()));
+  socket.on("setName", (candidate: unknown) => setPlayerName(player, candidate, Date.now()));
   socket.on("disconnect", () => {
     players.delete(socket.id);
     World.remove(engine.world, player.body);

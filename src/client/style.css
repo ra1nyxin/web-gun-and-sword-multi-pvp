@@ -131,6 +131,54 @@ button {
   color: #ed8f57;
 }
 
+#name-form {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 5px;
+  align-items: center;
+  margin-top: 8px;
+}
+
+#name-form label {
+  color: #9fb3b9;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+#name-input {
+  min-width: 0;
+  height: 25px;
+  border: 1px solid rgba(233, 242, 231, 0.35);
+  border-radius: 2px;
+  outline: 0;
+  background: #101820;
+  color: #e9f2e7;
+  font: inherit;
+  font-size: 11px;
+  padding: 0 5px;
+}
+
+#name-input:focus {
+  border-color: #76c893;
+}
+
+#name-form button {
+  height: 25px;
+  border: 1px solid #76c893;
+  border-radius: 2px;
+  background: rgba(118, 200, 147, 0.16);
+  color: #b8e986;
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+#name-form button:hover,
+#name-form button:focus-visible {
+  background: rgba(118, 200, 147, 0.3);
+  outline: 0;
+}
+
 #score {
   top: 18px;
   right: 18px;
@@ -394,6 +442,10 @@ button {
     top: 10px;
     left: 10px;
     width: 188px;
+  }
+
+  #name-form {
+    grid-template-columns: auto minmax(0, 1fr) auto;
   }
 
   .health-track {

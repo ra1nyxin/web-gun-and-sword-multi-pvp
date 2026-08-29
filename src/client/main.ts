@@ -88,6 +88,7 @@ type MuzzleFlash = {
 
 const VIEW_WIDTH = 1280;
 const VIEW_HEIGHT = 720;
+const PLAYER_NAME_KEY = "gun-and-sword-player-name";
 const canvas = document.querySelector<HTMLCanvasElement>("#game")!;
 const context = canvas.getContext("2d")!;
 const lightingCanvas = document.createElement("canvas");
@@ -129,6 +130,8 @@ const chatOpenButton = document.querySelector<HTMLButtonElement>("#chat-open")!;
 const chatLog = document.querySelector<HTMLOListElement>("#chat-log")!;
 const chatForm = document.querySelector<HTMLFormElement>("#chat-form")!;
 const chatInput = document.querySelector<HTMLInputElement>("#chat-input")!;
+const nameForm = document.querySelector<HTMLFormElement>("#name-form")!;
+const nameInput = document.querySelector<HTMLInputElement>("#name-input")!;
 
 let myId = "";
 let latestSnapshot: Snapshot | null = null;
@@ -147,6 +150,22 @@ let leaderboardKey = "";
 let chatActive = false;
 let chatMessages: ChatMessage[] = [];
 let lastRenderAt = 0;
+
+function readStoredPlayerName() {
+  try {
+    return localStorage.getItem(PLAYER_NAME_KEY)?.trim() ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function storePlayerName(name: string) {
+  try {
+    localStorage.setItem(PLAYER_NAME_KEY, name);
+  } catch {
+    // Private browsing may disable local storage; the server name still works.
+  }
+}
 
 function applyInventory(next: InventoryState) {
   if (next.slots.length !== INVENTORY_SIZE) return;
@@ -552,10 +571,18 @@ function updateVisualEffects(now: number) {
   }
 }
 
-socket.on("welcome", ({ id, inventory: nextInventory }: { id: string; inventory: InventoryState }) => {
+socket.on("welcome", ({ id, name, inventory: nextInventory }: { id: string; name: string; inventory: InventoryState }) => {
   myId = id;
   applyInventory(nextInventory);
+  const storedName = readStoredPlayerName();
+  nameInput.value = storedName || name;
+  if (storedName) socket.emit("setName", storedName);
   connection.textContent = "在线";
+});
+
+socket.on("name", ({ name }: { name: string }) => {
+  nameInput.value = name;
+  storePlayerName(name);
 });
 
 socket.on("inventory", (nextInventory: InventoryState) => applyInventory(nextInventory));
@@ -654,6 +681,17 @@ chatInput.addEventListener("keydown", (event) => {
     sendChat();
   }
 });
+nameForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  const name = nameInput.value.trim();
+  if (!name) return;
+  storePlayerName(name);
+  socket.emit("setName", name);
+});
+nameInput.addEventListener("input", () => {
+  nameInput.value = Array.from(nameInput.value).slice(0, 16).join("");
+});
+nameInput.addEventListener("keydown", (event) => event.stopPropagation());
 chatOpenButton.addEventListener("click", openChat);
 canvas.addEventListener("contextmenu", (event) => event.preventDefault());
 canvas.addEventListener("mousedown", (event) => {
