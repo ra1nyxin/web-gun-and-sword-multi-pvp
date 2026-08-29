@@ -44,6 +44,14 @@ const VIEW_WIDTH = 1280;
 const VIEW_HEIGHT = 720;
 const canvas = document.querySelector<HTMLCanvasElement>("#game")!;
 const context = canvas.getContext("2d")!;
+const lightingCanvas = document.createElement("canvas");
+lightingCanvas.width = VIEW_WIDTH;
+lightingCanvas.height = VIEW_HEIGHT;
+const lightingContext = lightingCanvas.getContext("2d")!;
+const lightCanvas = document.createElement("canvas");
+lightCanvas.width = VIEW_WIDTH;
+lightCanvas.height = VIEW_HEIGHT;
+const lightContext = lightCanvas.getContext("2d")!;
 const socket: Socket = io({ transports: ["websocket", "polling"] });
 const players = new Map<string, RenderPlayer>();
 const bullets = new Map<string, BulletVisual>();
@@ -546,41 +554,155 @@ function drawLightFixtures() {
   context.restore();
 }
 
+type LightOccluder = {
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
+};
+
+function normalizeAngle(angle: number) {
+  while (angle <= -Math.PI) angle += Math.PI * 2;
+  while (angle > Math.PI) angle -= Math.PI * 2;
+  return angle;
+}
+
+function drawShadowPolygon(
+  target: CanvasRenderingContext2D,
+  sourceX: number,
+  sourceY: number,
+  lightRadius: number,
+  occluder: LightOccluder,
+) {
+  if (sourceX >= occluder.left && sourceX <= occluder.right && sourceY >= occluder.top && sourceY <= occluder.bottom) {
+    return;
+  }
+  const centerX = (occluder.left + occluder.right) / 2;
+  const centerY = (occluder.top + occluder.bottom) / 2;
+  const halfDiagonal = Math.hypot(occluder.right - centerX, occluder.bottom - centerY);
+  if (Math.hypot(centerX - sourceX, centerY - sourceY) - halfDiagonal > lightRadius) return;
+
+  const corners = [
+    { x: occluder.left, y: occluder.top },
+    { x: occluder.right, y: occluder.top },
+    { x: occluder.right, y: occluder.bottom },
+    { x: occluder.left, y: occluder.bottom },
+  ];
+  const centerAngle = Math.atan2(centerY - sourceY, centerX - sourceX);
+  const deltas = corners.map((corner) => normalizeAngle(Math.atan2(corner.y - sourceY, corner.x - sourceX) - centerAngle));
+  let minIndex = 0;
+  let maxIndex = 0;
+  for (let index = 1; index < deltas.length; index += 1) {
+    if (deltas[index] < deltas[minIndex]) minIndex = index;
+    if (deltas[index] > deltas[maxIndex]) maxIndex = index;
+  }
+  const minDelta = deltas[minIndex];
+  const maxDelta = deltas[maxIndex];
+  if (maxDelta - minDelta > Math.PI * 0.98) return;
+
+  const directionX = centerX - sourceX;
+  const directionY = centerY - sourceY;
+  const farCornerIndexes = corners
+    .map((corner, index) => ({
+      index,
+      projection: (corner.x - centerX) * directionX + (corner.y - centerY) * directionY,
+    }))
+    .sort((left, right) => right.projection - left.projection)
+    .slice(0, 2)
+    .map((entry) => entry.index)
+    .sort((left, right) => deltas[left] - deltas[right]);
+
+  const distance = Math.max(lightRadius * 2.2, Math.hypot(VIEW_WIDTH, VIEW_HEIGHT) * 2);
+  const farMin = {
+    x: sourceX + Math.cos(centerAngle + minDelta) * distance,
+    y: sourceY + Math.sin(centerAngle + minDelta) * distance,
+  };
+  const farMax = {
+    x: sourceX + Math.cos(centerAngle + maxDelta) * distance,
+    y: sourceY + Math.sin(centerAngle + maxDelta) * distance,
+  };
+  const shadowStartA = corners[farCornerIndexes[0]];
+  const shadowStartB = corners[farCornerIndexes[1]];
+  target.beginPath();
+  target.moveTo(shadowStartA.x, shadowStartA.y);
+  target.lineTo(shadowStartB.x, shadowStartB.y);
+  target.lineTo(farMax.x, farMax.y);
+  target.lineTo(farMin.x, farMin.y);
+  target.closePath();
+  target.fill();
+}
+
 function drawLighting() {
   const left = cameraX - VIEW_WIDTH / 2;
   const top = cameraY - VIEW_HEIGHT / 2;
+
   context.save();
   context.fillStyle = "rgba(2, 5, 9, 0.56)";
   context.fillRect(left, top, VIEW_WIDTH, VIEW_HEIGHT);
-  context.globalCompositeOperation = "lighter";
+
+  lightingContext.setTransform(1, 0, 0, 1, 0, 0);
+  lightingContext.clearRect(0, 0, VIEW_WIDTH, VIEW_HEIGHT);
   for (const light of LIGHTS) {
     if (light.x + light.radius < left || light.x - light.radius > left + VIEW_WIDTH) continue;
     if (light.y + light.radius < top || light.y - light.radius > top + VIEW_HEIGHT) continue;
-    const gradient = context.createRadialGradient(light.x, light.y, 0, light.x, light.y, light.radius);
+
+    const sourceX = light.x - left;
+    const sourceY = light.y - top;
+    lightContext.setTransform(1, 0, 0, 1, 0, 0);
+    lightContext.clearRect(0, 0, VIEW_WIDTH, VIEW_HEIGHT);
+    lightContext.globalCompositeOperation = "source-over";
+    const gradient = lightContext.createRadialGradient(sourceX, sourceY, 0, sourceX, sourceY, light.radius);
     gradient.addColorStop(0, rgba(light.color, 0.38));
     gradient.addColorStop(0.32, rgba(light.color, 0.18));
     gradient.addColorStop(1, rgba(light.color, 0));
-    context.save();
+    lightContext.save();
     if (light.kind === "spot") {
       const angle = light.angle ?? Math.PI / 2;
       const spread = light.spread ?? 0.4;
-      context.beginPath();
-      context.moveTo(light.x, light.y);
-      context.lineTo(
-        light.x + Math.cos(angle - spread) * light.radius,
-        light.y + Math.sin(angle - spread) * light.radius,
+      lightContext.beginPath();
+      lightContext.moveTo(sourceX, sourceY);
+      lightContext.lineTo(
+        sourceX + Math.cos(angle - spread) * light.radius,
+        sourceY + Math.sin(angle - spread) * light.radius,
       );
-      context.lineTo(
-        light.x + Math.cos(angle + spread) * light.radius,
-        light.y + Math.sin(angle + spread) * light.radius,
+      lightContext.lineTo(
+        sourceX + Math.cos(angle + spread) * light.radius,
+        sourceY + Math.sin(angle + spread) * light.radius,
       );
-      context.closePath();
-      context.clip();
+      lightContext.closePath();
+      lightContext.clip();
     }
-    context.fillStyle = gradient;
-    context.fillRect(light.x - light.radius, light.y - light.radius, light.radius * 2, light.radius * 2);
-    context.restore();
+    lightContext.fillStyle = gradient;
+    lightContext.fillRect(sourceX - light.radius, sourceY - light.radius, light.radius * 2, light.radius * 2);
+    lightContext.restore();
+
+    lightContext.globalCompositeOperation = "destination-out";
+    lightContext.fillStyle = "rgba(0, 0, 0, 1)";
+    for (const platform of PLATFORMS) {
+      const platformLeft = platform.x - platform.width / 2 - left;
+      const platformTop = platform.y - platform.height / 2 - top;
+      drawShadowPolygon(lightContext, sourceX, sourceY, light.radius, {
+        left: platformLeft,
+        right: platformLeft + platform.width,
+        top: platformTop,
+        bottom: platformTop + platform.height,
+      });
+    }
+    for (const player of players.values()) {
+      if (player.state.dead) continue;
+      drawShadowPolygon(lightContext, sourceX, sourceY, light.radius, {
+        left: player.x - 20 - left,
+        right: player.x + 20 - left,
+        top: player.y - 36 - top,
+        bottom: player.y + 22 - top,
+      });
+    }
+    lightingContext.globalCompositeOperation = "lighter";
+    lightingContext.drawImage(lightCanvas, 0, 0);
   }
+
+  context.globalCompositeOperation = "lighter";
+  context.drawImage(lightingCanvas, left, top);
   context.restore();
 }
 
