@@ -6,7 +6,11 @@ import Matter from "matter-js";
 import { Server } from "socket.io";
 import {
   DEV_SOCKET_PORT,
+  CasingEvent,
   ChatMessage,
+  DamageEvent,
+  ELEVATORS,
+  ElevatorState,
   INVENTORY_SIZE,
   ImpactEvent,
   InputState,
@@ -21,6 +25,7 @@ import {
   PlayerState,
   SPAWNS,
   Snapshot,
+  ShotEvent,
   STARTING_INVENTORY,
   WORLD,
   ZONES,
@@ -50,6 +55,16 @@ const terrain = PLATFORMS.map((platform) =>
 );
 World.add(engine.world, terrain);
 
+const elevatorBodies = ELEVATORS.map((elevator) =>
+  Bodies.rectangle(elevator.x, (elevator.minY + elevator.maxY) / 2, elevator.width, elevator.height, {
+    isStatic: true,
+    friction: 0.85,
+    label: "elevator",
+  }),
+);
+World.add(engine.world, elevatorBodies);
+const solidTerrain = [...terrain, ...elevatorBodies];
+
 type BotBrain = {
   targetId: string | null;
   nextThinkAt: number;
@@ -71,6 +86,8 @@ type Player = {
   deaths: number;
   dead: boolean;
   respawnAt: number;
+  invulnerableUntil: number;
+  pendingDrops: ItemId[];
   slashUntil: number;
   swingHits: Set<string>;
   lastNoticeAt: number;
@@ -135,6 +152,32 @@ function getSpawn() {
   return spawn;
 }
 
+function updateElevators(now: number) {
+  for (let index = 0; index < ELEVATORS.length; index += 1) {
+    const definition = ELEVATORS[index];
+    const body = elevatorBodies[index];
+    const previousY = body.position.y;
+    const progress = 0.5 + Math.sin(now * definition.speed + definition.phase) * 0.5;
+    const nextY = definition.minY + (definition.maxY - definition.minY) * progress;
+    const deltaY = nextY - previousY;
+    if (Math.abs(deltaY) < 0.001) continue;
+    Body.setPosition(body, { x: definition.x, y: nextY });
+    for (const player of players.values()) {
+      if (player.dead) continue;
+      const bounds = player.body.bounds;
+      const wasOverlappingX = bounds.max.x > definition.x - definition.width / 2 + 4 && bounds.min.x < definition.x + definition.width / 2 - 4;
+      const wasOnTop = bounds.max.y >= previousY - definition.height / 2 - 7 && bounds.max.y <= previousY - definition.height / 2 + 12;
+      if (wasOverlappingX && wasOnTop) Body.translate(player.body, { x: 0, y: deltaY });
+    }
+    for (const pickup of pickups.values()) {
+      const bounds = pickup.body.bounds;
+      const wasOverlappingX = bounds.max.x > definition.x - definition.width / 2 + 2 && bounds.min.x < definition.x + definition.width / 2 - 2;
+      const wasOnTop = bounds.max.y >= previousY - definition.height / 2 - 6 && bounds.max.y <= previousY - definition.height / 2 + 10;
+      if (wasOverlappingX && wasOnTop) Body.translate(pickup.body, { x: 0, y: deltaY });
+    }
+  }
+}
+
 function activeItem(player: Player) {
   return player.inventory[player.selectedSlot] ?? null;
 }
@@ -192,10 +235,75 @@ function normalizeAim(input: InputState) {
   return { x: input.aimX / length, y: input.aimY / length };
 }
 
+function segmentHitsRect(
+  startX: number,
+  startY: number,
+  endX: number,
+  endY: number,
+  left: number,
+  top: number,
+  right: number,
+  bottom: number,
+) {
+  const deltaX = endX - startX;
+  const deltaY = endY - startY;
+  let enter = 0;
+  let exit = 1;
+  for (const [origin, delta, min, max] of [[startX, deltaX, left, right], [startY, deltaY, top, bottom]] as const) {
+    if (Math.abs(delta) < 0.0001) {
+      if (origin < min || origin > max) return false;
+      continue;
+    }
+    const inverse = 1 / delta;
+    let near = (min - origin) * inverse;
+    let far = (max - origin) * inverse;
+    if (near > far) [near, far] = [far, near];
+    enter = Math.max(enter, near);
+    exit = Math.min(exit, far);
+    if (enter > exit) return false;
+  }
+  return exit > 0.08 && enter < 0.92;
+}
+
+function hasLineOfSight(source: Player, target: Player) {
+  const startX = source.body.position.x;
+  const startY = source.body.position.y - 18;
+  const endX = target.body.position.x;
+  const endY = target.body.position.y - 18;
+  for (const platform of PLATFORMS) {
+    if (segmentHitsRect(startX, startY, endX, endY, platform.x - platform.width / 2, platform.y - platform.height / 2, platform.x + platform.width / 2, platform.y + platform.height / 2)) {
+      return false;
+    }
+  }
+  for (const elevator of elevatorBodies) {
+    if (segmentHitsRect(startX, startY, endX, endY, elevator.bounds.min.x, elevator.bounds.min.y, elevator.bounds.max.x, elevator.bounds.max.y)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function bulletPathClear(bullet: Bullet, target: Player) {
+  for (const platform of PLATFORMS) {
+    if (segmentHitsRect(bullet.body.position.x, bullet.body.position.y, target.body.position.x, target.body.position.y, platform.x - platform.width / 2, platform.y - platform.height / 2, platform.x + platform.width / 2, platform.y + platform.height / 2)) {
+      return false;
+    }
+  }
+  for (const elevator of elevatorBodies) {
+    if (segmentHitsRect(bullet.body.position.x, bullet.body.position.y, target.body.position.x, target.body.position.y, elevator.bounds.min.x, elevator.bounds.min.y, elevator.bounds.max.x, elevator.bounds.max.y)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function findBotTarget(bot: Player) {
   return [...players.values()]
     .filter((candidate) => candidate.id !== bot.id && !candidate.dead)
     .sort((left, right) => {
+      const leftVisible = hasLineOfSight(bot, left) ? 0 : 1;
+      const rightVisible = hasLineOfSight(bot, right) ? 0 : 1;
+      if (leftVisible !== rightVisible) return leftVisible - rightVisible;
       const leftDistance = Math.hypot(left.body.position.x - bot.body.position.x, left.body.position.y - bot.body.position.y);
       const rightDistance = Math.hypot(right.body.position.x - bot.body.position.x, right.body.position.y - bot.body.position.y);
       return leftDistance - rightDistance;
@@ -207,16 +315,17 @@ function incomingBulletDodge(bot: Player) {
   let dodgeDirection = 0;
   for (const bullet of bullets.values()) {
     if (bullet.ownerId === bot.id) continue;
+    if (!bulletPathClear(bullet, bot)) continue;
     const velocity = bullet.body.velocity;
     const speedSquared = velocity.x * velocity.x + velocity.y * velocity.y;
     if (speedSquared < 0.01) continue;
     const offsetX = bot.body.position.x - bullet.body.position.x;
     const offsetY = bot.body.position.y - bullet.body.position.y;
-    const projectedTime = Math.max(0, Math.min(12, (offsetX * velocity.x + offsetY * velocity.y) / speedSquared));
+    const projectedTime = Math.max(0, Math.min(18, (offsetX * velocity.x + offsetY * velocity.y) / speedSquared));
     const closestX = bullet.body.position.x + velocity.x * projectedTime;
     const closestY = bullet.body.position.y + velocity.y * projectedTime;
     const distance = Math.hypot(bot.body.position.x - closestX, bot.body.position.y - closestY);
-    if (distance > 68 || distance >= closestDistance) continue;
+    if (distance > 78 || distance >= closestDistance) continue;
     closestDistance = distance;
     const perpendicularX = -velocity.y;
     const perpendicularY = velocity.x;
@@ -264,17 +373,19 @@ function updateBotAI(bot: Player, now: number) {
     const dx = target.body.position.x - bot.body.position.x;
     const dy = target.body.position.y - bot.body.position.y;
     const distance = Math.hypot(dx, dy);
+    const visible = hasLineOfSight(bot, target);
     const prediction = Math.min(14, distance / 20);
     bot.input.aimX = target.body.position.x + target.body.velocity.x * prediction - bot.body.position.x;
     bot.input.aimY = target.body.position.y + target.body.velocity.y * prediction - bot.body.position.y;
     if (dodgeDirection === null) {
-      if (distance > 125) moveDirection = Math.sign(dx) || brain.strafeDirection;
+      if (bot.health < 35 && bot.inventory.indexOf("medkit") === -1) moveDirection = -Math.sign(dx) || brain.strafeDirection;
+      else if (!visible || distance > 125) moveDirection = Math.sign(dx) || brain.strafeDirection;
       else if (distance < 70) moveDirection = -Math.sign(dx) || brain.strafeDirection;
     }
     const weaponSlot = botWeaponSlot(bot, distance);
     if (weaponSlot >= 0) {
       bot.selectedSlot = weaponSlot;
-      if (now >= brain.nextAttackAt) {
+      if (now >= brain.nextAttackAt && (visible || distance < 100)) {
         useSelectedItem(bot, now);
         brain.nextAttackAt = now + 70 + Math.random() * 90;
       }
@@ -317,6 +428,8 @@ function createBot(id: string, name: string, spawn: { x: number; y: number }) {
     deaths: 0,
     dead: false,
     respawnAt: 0,
+    invulnerableUntil: Date.now() + 3_000,
+    pendingDrops: [],
     slashUntil: 0,
     swingHits: new Set(),
     lastNoticeAt: 0,
@@ -355,6 +468,7 @@ function playerState(player: Player, now: number): PlayerState {
     selectedSlot: player.selectedSlot,
     weaponReadyIn: readyIn,
     slashUntil: Math.max(0, player.slashUntil - now),
+    invulnerableUntil: Math.max(0, player.invulnerableUntil - now),
   };
 }
 
@@ -369,6 +483,12 @@ function isGrounded(player: Player) {
     return overlapsX && feetY >= top - 6 && feetY <= top + 10 && player.body.velocity.y >= -1;
   });
   if (groundedOnTerrain) return true;
+  const groundedOnElevator = elevatorBodies.some((elevator) => {
+    const elevatorBounds = elevator.bounds;
+    const overlapsX = bounds.max.x > elevatorBounds.min.x + 4 && bounds.min.x < elevatorBounds.max.x - 4;
+    return overlapsX && feetY >= elevatorBounds.min.y - 7 && feetY <= elevatorBounds.min.y + 11 && player.body.velocity.y >= -1;
+  });
+  if (groundedOnElevator) return true;
   return [...pickups.values()].some((pickup) => {
     const pickupBounds = pickup.body.bounds;
     const overlapsX = bounds.max.x > pickupBounds.min.x + 4 && bounds.min.x < pickupBounds.max.x - 4;
@@ -376,11 +496,12 @@ function isGrounded(player: Player) {
   });
 }
 
-function respawn(player: Player) {
+function respawn(player: Player, now: number) {
   const spawn = getSpawn();
   player.health = WORLD.maxHealth;
   player.dead = false;
   player.respawnAt = 0;
+  player.invulnerableUntil = now + 3_000;
   player.input.jump = false;
   Body.setPosition(player.body, spawn);
   Body.setVelocity(player.body, { x: 0, y: 0 });
@@ -401,9 +522,20 @@ function recordKill(attacker: Player, target: Player, item: ItemId) {
 
 function damage(target: Player, attacker: Player, amount: number, now: number, item: ItemId) {
   if (target.dead || target.id === attacker.id) return;
-  target.health = Math.max(0, target.health - amount);
+  if (target.invulnerableUntil > now) return;
+  const appliedDamage = Math.min(amount, target.health);
+  target.health = Math.max(0, target.health - appliedDamage);
+  const damageEvent: DamageEvent = {
+    targetId: target.id,
+    x: target.body.position.x,
+    y: target.body.position.y - 25,
+    amount: appliedDamage,
+    item,
+  };
+  io.emit("damage", damageEvent);
   if (target.health > 0) return;
 
+  dropInventoryOnDeath(target, now);
   target.dead = true;
   target.deaths += 1;
   target.respawnAt = now + 1_800;
@@ -480,6 +612,46 @@ function spawnPickup(
   return pickup;
 }
 
+function dropInventoryOnDeath(player: Player, now: number) {
+  const carriedItems = player.inventory.filter((item): item is ItemId => item !== null);
+  player.inventory.fill(null);
+  player.selectedSlot = 0;
+  for (let index = 0; index < carriedItems.length; index += 1) {
+    const item = carriedItems[index];
+    const angle = (index / Math.max(1, carriedItems.length)) * Math.PI * 2 + (Math.random() - 0.5) * 0.4;
+    const pickup = spawnPickup(
+      item,
+      player.body.position.x + Math.cos(angle) * 26,
+      player.body.position.y - 16,
+      now,
+      {
+        velocity: {
+          x: Math.cos(angle) * (4.2 + Math.random() * 3.6),
+          y: -5.5 - Math.random() * 2.5,
+        },
+        angularVelocity: (Math.random() - 0.5) * 0.48,
+      },
+    );
+    if (!pickup) player.pendingDrops.push(item);
+  }
+  syncInventory(player);
+}
+
+function flushPendingDrops(now: number) {
+  for (const player of players.values()) {
+    if (player.pendingDrops.length === 0) continue;
+    const remaining: ItemId[] = [];
+    for (const item of player.pendingDrops) {
+      const pickup = spawnPickup(item, player.body.position.x, player.body.position.y - 30, now, {
+        velocity: { x: (Math.random() - 0.5) * 5, y: -4.5 - Math.random() * 2 },
+        angularVelocity: (Math.random() - 0.5) * 0.4,
+      });
+      if (!pickup) remaining.push(item);
+    }
+    player.pendingDrops = remaining;
+  }
+}
+
 function spawnWorldLoot(now: number) {
   const worldPickupCount = [...pickups.values()].filter((pickup) => pickup.isWorld).length;
   if (worldPickupCount >= LOOT_SPAWNS.length) return;
@@ -499,6 +671,11 @@ function shootProjectile(player: Player, item: ItemId, now: number) {
   const pellets = weapon.projectiles ?? 1;
   const spread = weapon.spread ?? 0;
   const baseAngle = Math.atan2(aim.y, aim.x);
+  const muzzleX = player.body.position.x + aim.x * 25;
+  const muzzleY = player.body.position.y + aim.y * 7;
+  io.emit("weaponSound", { ownerId: player.id, x: muzzleX, y: muzzleY, angle: baseAngle, item });
+  const shotEvent: ShotEvent = { ownerId: player.id, x: muzzleX, y: muzzleY, angle: baseAngle, item };
+  io.emit("shot", shotEvent);
   for (let index = 0; index < pellets; index += 1) {
     const factor = pellets === 1 ? 0 : index / (pellets - 1) - 0.5;
     const angle = baseAngle + factor * spread;
@@ -523,6 +700,19 @@ function shootProjectile(player: Player, item: ItemId, now: number) {
     });
     World.add(engine.world, body);
   }
+  if (item !== "plasma") {
+    const casingAngle = baseAngle - Math.PI / 2;
+    const casing: CasingEvent = {
+      x: muzzleX - aim.x * 4,
+      y: muzzleY - aim.y * 4,
+      vx: aim.x * 1.8 + Math.cos(casingAngle) * (2.2 + Math.random() * 1.8),
+      vy: aim.y * 1.8 + Math.sin(casingAngle) * (2.2 + Math.random() * 1.8) - 2.2,
+      angle: casingAngle,
+      angularVelocity: (Math.random() - 0.5) * 0.55,
+      item,
+    };
+    io.emit("casing", casing);
+  }
 }
 
 function useSelectedItem(player: Player, now: number) {
@@ -536,6 +726,13 @@ function useSelectedItem(player: Player, now: number) {
   if (now - player.cooldowns[item] < weapon.cooldown) return;
 
   if (weapon.kind === "melee") {
+    io.emit("weaponSound", {
+      ownerId: player.id,
+      x: player.body.position.x,
+      y: player.body.position.y,
+      angle: Math.atan2(player.input.aimY, player.input.aimX),
+      item,
+    });
     player.cooldowns[item] = now;
     player.slashUntil = now + 155;
     player.swingHits.clear();
@@ -632,7 +829,7 @@ function resolveBullets(now: number) {
       removeBullet(bullet.id);
       continue;
     }
-    if (Query.collides(bullet.body, terrain).length > 0) {
+    if (Query.collides(bullet.body, solidTerrain).length > 0) {
       removeBullet(bullet.id, true);
       continue;
     }
@@ -695,6 +892,13 @@ function snapshot(now: number): Snapshot {
       y: pickup.body.position.y,
       angle: pickup.body.angle,
     })),
+    elevators: elevatorBodies.map((body, index) => ({
+      id: ELEVATORS[index].id,
+      x: body.position.x,
+      y: body.position.y,
+      width: ELEVATORS[index].width,
+      height: ELEVATORS[index].height,
+    })),
     killFeed: [...killFeed],
   };
 }
@@ -726,6 +930,8 @@ io.on("connection", (socket) => {
     deaths: 0,
     dead: false,
     respawnAt: 0,
+    invulnerableUntil: Date.now() + 3_000,
+    pendingDrops: [],
     slashUntil: 0,
     swingHits: new Set(),
     lastNoticeAt: 0,
@@ -759,8 +965,9 @@ io.on("connection", (socket) => {
 
 setInterval(() => {
   const now = Date.now();
+  updateElevators(now);
   for (const player of players.values()) {
-    if (player.dead && player.respawnAt <= now) respawn(player);
+    if (player.dead && player.respawnAt <= now) respawn(player, now);
     if (player.isBot) updateBotAI(player, now);
     updatePlayerMovement(player);
   }
@@ -768,6 +975,7 @@ setInterval(() => {
   resolveSwordSwings(now);
   resolveBullets(now);
   resolvePickups(now);
+  flushPendingDrops(now);
 }, 1000 / 60);
 
 setInterval(() => spawnWorldLoot(Date.now()), 3_500);

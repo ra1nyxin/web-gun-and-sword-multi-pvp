@@ -139,6 +139,24 @@ export const PLATFORMS: PlatformDefinition[] = [
   { x: 4400, y: 970, width: 130, height: 30 },
 ];
 
+export type ElevatorDefinition = {
+  id: string;
+  x: number;
+  width: number;
+  height: number;
+  minY: number;
+  maxY: number;
+  speed: number;
+  phase: number;
+};
+
+export const ELEVATORS: ElevatorDefinition[] = [
+  { id: "lift-west", x: 560, width: 104, height: 18, minY: 1100, maxY: 1580, speed: 0.00115, phase: 0.2 },
+  { id: "lift-core", x: 2380, width: 108, height: 18, minY: 980, maxY: 1580, speed: 0.00135, phase: 1.7 },
+  { id: "lift-east", x: 3400, width: 112, height: 18, minY: 1040, maxY: 1580, speed: 0.00105, phase: 3.1 },
+  { id: "lift-tower", x: 4600, width: 108, height: 18, minY: 760, maxY: 1510, speed: 0.00125, phase: 4.4 },
+];
+
 export const SPAWNS = [
   { x: 100, y: 1710 },
   { x: 660, y: 1710 },
@@ -325,6 +343,7 @@ export type PlayerState = {
   selectedSlot: number;
   weaponReadyIn: number;
   slashUntil: number;
+  invulnerableUntil: number;
 };
 
 export type BulletState = {
@@ -339,6 +358,48 @@ export type ImpactEvent = {
   item: ItemId;
   x: number;
   y: number;
+};
+
+export type DamageEvent = {
+  targetId: string;
+  x: number;
+  y: number;
+  amount: number;
+  item: ItemId;
+};
+
+export type ShotEvent = {
+  ownerId: string;
+  x: number;
+  y: number;
+  angle: number;
+  item: ItemId;
+};
+
+export type CasingEvent = {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  angle: number;
+  angularVelocity: number;
+  item: ItemId;
+};
+
+export type WeaponSoundEvent = {
+  ownerId: string;
+  x: number;
+  y: number;
+  angle: number;
+  item: ItemId;
+};
+
+export type ElevatorState = {
+  id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 };
 
 export type PickupState = {
@@ -368,5 +429,6 @@ export type Snapshot = {
   players: PlayerState[];
   bullets: BulletState[];
   pickups: PickupState[];
+  elevators: ElevatorState[];
   killFeed: KillEvent[];
 };

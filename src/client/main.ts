@@ -1,6 +1,18 @@
 import { io, Socket } from "socket.io-client";
-import { INVENTORY_SIZE, ITEMS, LIGHTS, PLATFORMS, WORLD, ZONES } from "../shared/game";
-import type { ChatMessage, ImpactEvent, InventorySlot, InventoryState, ItemId, PlayerState, Snapshot } from "../shared/game";
+import { ELEVATORS, INVENTORY_SIZE, ITEMS, LIGHTS, PLATFORMS, WORLD, ZONES } from "../shared/game";
+import type {
+  CasingEvent,
+  ChatMessage,
+  DamageEvent,
+  ImpactEvent,
+  InventorySlot,
+  InventoryState,
+  ItemId,
+  PlayerState,
+  ShotEvent,
+  Snapshot,
+  WeaponSoundEvent,
+} from "../shared/game";
 import "./style.css";
 
 type RenderPlayer = {
@@ -50,6 +62,30 @@ type ImpactFlash = {
   color: string;
 };
 
+type DamageNumber = {
+  x: number;
+  y: number;
+  amount: number;
+  life: number;
+  maxLife: number;
+  color: string;
+};
+
+type CasingVisual = CasingEvent & {
+  life: number;
+  maxLife: number;
+  color: string;
+};
+
+type MuzzleFlash = {
+  x: number;
+  y: number;
+  angle: number;
+  life: number;
+  maxLife: number;
+  color: string;
+};
+
 const VIEW_WIDTH = 1280;
 const VIEW_HEIGHT = 720;
 const canvas = document.querySelector<HTMLCanvasElement>("#game")!;
@@ -70,6 +106,9 @@ const keys = new Set<string>();
 const slotButtons: HTMLButtonElement[] = [];
 const impactParticles: ImpactParticle[] = [];
 const impactFlashes: ImpactFlash[] = [];
+const damageNumbers: DamageNumber[] = [];
+const casings: CasingVisual[] = [];
+const muzzleFlashes: MuzzleFlash[] = [];
 
 const healthFill = document.querySelector<HTMLDivElement>("#health-fill")!;
 const healthValue = document.querySelector<HTMLSpanElement>("#health-value")!;
@@ -286,6 +325,94 @@ function rgba(hex: string, alpha: number) {
   return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
 }
 
+let audioContext: AudioContext | null = null;
+
+function getAudioContext() {
+  if (!audioContext) audioContext = new AudioContext();
+  if (audioContext.state === "suspended") void audioContext.resume();
+  return audioContext;
+}
+
+function playWeaponSound(event: WeaponSoundEvent) {
+  let audio: AudioContext;
+  try {
+    audio = getAudioContext();
+  } catch {
+    return;
+  }
+  const now = audio.currentTime;
+  const oscillator = audio.createOscillator();
+  const gain = audio.createGain();
+  oscillator.type = event.item === "sword" ? "sawtooth" : event.item === "plasma" ? "sine" : "square";
+  const frequency = event.item === "sword" ? 180 : event.item === "plasma" ? 280 : event.item === "scattergun" ? 95 : 150;
+  oscillator.frequency.setValueAtTime(frequency, now);
+  oscillator.frequency.exponentialRampToValueAtTime(Math.max(45, frequency * 0.42), now + (event.item === "sword" ? 0.16 : 0.08));
+  gain.gain.setValueAtTime(0.0001, now);
+  gain.gain.exponentialRampToValueAtTime(event.item === "sword" ? 0.055 : 0.075, now + 0.004);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + (event.item === "sword" ? 0.18 : 0.1));
+  oscillator.connect(gain).connect(audio.destination);
+  oscillator.start(now);
+  oscillator.stop(now + (event.item === "sword" ? 0.2 : 0.12));
+
+  if (event.item !== "sword") {
+    const buffer = audio.createBuffer(1, Math.floor(audio.sampleRate * 0.06), audio.sampleRate);
+    const channel = buffer.getChannelData(0);
+    for (let index = 0; index < channel.length; index += 1) channel[index] = (Math.random() * 2 - 1) * (1 - index / channel.length);
+    const noise = audio.createBufferSource();
+    const noiseGain = audio.createGain();
+    noiseGain.gain.setValueAtTime(0.0001, now);
+    noiseGain.gain.exponentialRampToValueAtTime(event.item === "scattergun" ? 0.07 : 0.035, now + 0.002);
+    noiseGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.06);
+    noise.buffer = buffer;
+    noise.connect(noiseGain).connect(audio.destination);
+    noise.start(now);
+  }
+}
+
+function spawnMuzzleFlash(event: ShotEvent) {
+  const definition = ITEMS[event.item];
+  muzzleFlashes.push({ x: event.x, y: event.y, angle: event.angle, life: 85, maxLife: 85, color: definition.color });
+  const count = event.item === "scattergun" ? 8 : 5;
+  for (let index = 0; index < count; index += 1) {
+    const angle = event.angle + (Math.random() - 0.5) * 0.65;
+    const life = 120 + Math.random() * 160;
+    const speed = 0.18 + Math.random() * 0.28;
+    impactParticles.push({
+      x: event.x,
+      y: event.y,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      life,
+      maxLife: life,
+      color: definition.accent,
+      size: 1.2 + Math.random() * 2.2,
+    });
+  }
+  muzzleFlashes.splice(0, Math.max(0, muzzleFlashes.length - 32));
+}
+
+function spawnDamageNumber(event: DamageEvent) {
+  damageNumbers.push({
+    x: event.x + (Math.random() - 0.5) * 16,
+    y: event.y,
+    amount: Math.round(event.amount),
+    life: 720,
+    maxLife: 720,
+    color: ITEMS[event.item].accent,
+  });
+  damageNumbers.splice(0, Math.max(0, damageNumbers.length - 80));
+}
+
+function spawnCasing(event: CasingEvent) {
+  casings.push({
+    ...event,
+    life: 1_100,
+    maxLife: 1_100,
+    color: ITEMS[event.item].accent,
+  });
+  casings.splice(0, Math.max(0, casings.length - 80));
+}
+
 function spawnImpact(x: number, y: number, item: ItemId) {
   const color = ITEMS[item].color;
   const maxLife = item === "plasma" ? 360 : 250;
@@ -383,6 +510,33 @@ function updateVisualEffects(now: number) {
     pickup.y += (pickup.targetY - pickup.y) * 0.48;
     pickup.angle = approachAngle(pickup.angle, pickup.targetAngle, 0.5);
   }
+  const frameScale = delta / 16.67;
+  for (let index = casings.length - 1; index >= 0; index -= 1) {
+    const casing = casings[index];
+    casing.x += casing.vx * frameScale;
+    casing.y += casing.vy * frameScale;
+    casing.vy += 0.42 * frameScale;
+    casing.vx *= Math.pow(0.985, frameScale);
+    casing.angle += casing.angularVelocity * frameScale;
+    if (casing.y > WORLD.height - 28) {
+      casing.y = WORLD.height - 28;
+      casing.vy *= -0.28;
+      casing.vx *= 0.72;
+      casing.angularVelocity *= 0.72;
+    }
+    casing.life -= delta;
+    if (casing.life <= 0) casings.splice(index, 1);
+  }
+  for (let index = damageNumbers.length - 1; index >= 0; index -= 1) {
+    const number = damageNumbers[index];
+    number.y -= 0.045 * delta;
+    number.life -= delta;
+    if (number.life <= 0) damageNumbers.splice(index, 1);
+  }
+  for (let index = muzzleFlashes.length - 1; index >= 0; index -= 1) {
+    muzzleFlashes[index].life -= delta;
+    if (muzzleFlashes[index].life <= 0) muzzleFlashes.splice(index, 1);
+  }
   for (let index = impactParticles.length - 1; index >= 0; index -= 1) {
     const particle = impactParticles[index];
     particle.x += particle.vx * delta;
@@ -406,6 +560,10 @@ socket.on("welcome", ({ id, inventory: nextInventory }: { id: string; inventory:
 
 socket.on("inventory", (nextInventory: InventoryState) => applyInventory(nextInventory));
 socket.on("notice", ({ message }: { message: string }) => showNotice(message));
+socket.on("damage", (event: DamageEvent) => spawnDamageNumber(event));
+socket.on("shot", (event: ShotEvent) => spawnMuzzleFlash(event));
+socket.on("casing", (event: CasingEvent) => spawnCasing(event));
+socket.on("weaponSound", (event: WeaponSoundEvent) => playWeaponSound(event));
 socket.on("impact", (impact: ImpactEvent) => {
   bullets.delete(impact.bulletId);
   spawnImpact(impact.x, impact.y, impact.item);
@@ -499,6 +657,11 @@ chatInput.addEventListener("keydown", (event) => {
 chatOpenButton.addEventListener("click", openChat);
 canvas.addEventListener("contextmenu", (event) => event.preventDefault());
 canvas.addEventListener("mousedown", (event) => {
+  try {
+    getAudioContext();
+  } catch {
+    // Audio is optional when the browser blocks autoplay.
+  }
   worldPointFromEvent(event);
   if (event.button === 0) socket.emit("use");
 });
@@ -574,6 +737,24 @@ function drawArena() {
     context.strokeStyle = "#0b1217";
     context.lineWidth = 2;
     context.strokeRect(left, top, platform.width, platform.height);
+  }
+  for (const elevator of latestSnapshot?.elevators ?? []) {
+    const definition = ELEVATORS.find((entry) => entry.id === elevator.id);
+    const left = elevator.x - elevator.width / 2;
+    const top = elevator.y - elevator.height / 2;
+    context.fillStyle = "#344d59";
+    context.fillRect(left, top, elevator.width, elevator.height);
+    context.fillStyle = definition?.id === "lift-tower" ? "#d971ef" : "#76c893";
+    context.fillRect(left, top, elevator.width, 4);
+    context.strokeStyle = "#0b1217";
+    context.lineWidth = 2;
+    context.strokeRect(left, top, elevator.width, elevator.height);
+    context.strokeStyle = "rgba(233, 242, 231, 0.45)";
+    context.lineWidth = 1;
+    context.beginPath();
+    context.moveTo(left + 10, top + elevator.height - 5);
+    context.lineTo(left + elevator.width - 10, top + elevator.height - 5);
+    context.stroke();
   }
 }
 
@@ -777,6 +958,15 @@ function drawLighting() {
         drawSpotPlatformShadow(lightContext, sourceX, sourceY, light, platform, left, top);
       }
     }
+    for (const elevator of latestSnapshot?.elevators ?? []) {
+      drawShadowPolygon(lightContext, sourceX, sourceY, light.radius, {
+        left: elevator.x - elevator.width / 2 - left,
+        right: elevator.x + elevator.width / 2 - left,
+        top: elevator.y - elevator.height / 2 - top,
+        bottom: elevator.y + elevator.height / 2 - top,
+      });
+      if (light.kind === "spot") drawSpotPlatformShadow(lightContext, sourceX, sourceY, light, elevator, left, top);
+    }
     for (const player of players.values()) {
       if (player.state.dead) continue;
       drawShadowPolygon(lightContext, sourceX, sourceY, light.radius, {
@@ -832,6 +1022,70 @@ function drawBullets() {
     context.beginPath();
     context.arc(bullet.x, bullet.y, radius, 0, Math.PI * 2);
     context.fill();
+  }
+  context.restore();
+}
+
+function drawCasings() {
+  context.save();
+  for (const casing of casings) {
+    const alpha = Math.min(1, casing.life / 180);
+    context.globalAlpha = alpha;
+    context.translate(casing.x, casing.y);
+    context.rotate(casing.angle);
+    context.fillStyle = "#d6ad60";
+    context.fillRect(-3.5, -1.5, 7, 3);
+    context.strokeStyle = casing.color;
+    context.lineWidth = 0.8;
+    context.strokeRect(-3.5, -1.5, 7, 3);
+    context.setTransform(1, 0, 0, 1, 0, 0);
+  }
+  context.restore();
+}
+
+function drawMuzzleFlashes() {
+  context.save();
+  context.globalCompositeOperation = "lighter";
+  for (const flash of muzzleFlashes) {
+    const progress = flash.life / flash.maxLife;
+    const radius = 12 + progress * 16;
+    const gradient = context.createRadialGradient(flash.x, flash.y, 0, flash.x, flash.y, radius);
+    gradient.addColorStop(0, rgba("#ffffff", progress * 0.92));
+    gradient.addColorStop(0.35, rgba(flash.color, progress * 0.7));
+    gradient.addColorStop(1, rgba(flash.color, 0));
+    context.fillStyle = gradient;
+    context.beginPath();
+    context.arc(flash.x, flash.y, radius, 0, Math.PI * 2);
+    context.fill();
+    context.save();
+    context.translate(flash.x, flash.y);
+    context.rotate(flash.angle);
+    context.fillStyle = rgba(flash.color, progress * 0.46);
+    context.beginPath();
+    context.moveTo(4, -4);
+    context.lineTo(30 * progress, 0);
+    context.lineTo(4, 4);
+    context.closePath();
+    context.fill();
+    context.restore();
+  }
+  context.restore();
+}
+
+function drawDamageNumbers() {
+  context.save();
+  context.globalCompositeOperation = "lighter";
+  context.font = "700 16px 'Microsoft YaHei', Arial, sans-serif";
+  context.textAlign = "center";
+  context.textBaseline = "middle";
+  for (const number of damageNumbers) {
+    const alpha = Math.min(1, number.life / 150);
+    context.globalAlpha = alpha;
+    context.lineWidth = 4;
+    context.strokeStyle = "rgba(11, 18, 23, 0.9)";
+    context.strokeText(`-${number.amount}`, number.x, number.y);
+    context.fillStyle = number.color;
+    context.fillText(`-${number.amount}`, number.x, number.y);
   }
   context.restore();
 }
@@ -908,8 +1162,9 @@ function drawHeldItem(state: PlayerState) {
 function drawPlayer(player: RenderPlayer, isLocal: boolean) {
   const { state, x, y } = player;
   const bodyColor = isLocal ? "#46c5d6" : "#ed6a5a";
+  const invulnerable = state.invulnerableUntil > 0;
   context.save();
-  context.globalAlpha = state.dead ? 0.22 : 1;
+  context.globalAlpha = state.dead ? 0.22 : invulnerable ? 0.48 + Math.sin(performance.now() * 0.012) * 0.1 : 1;
   context.translate(x, y);
   context.fillStyle = bodyColor;
   context.strokeStyle = "#0b1217";
@@ -935,6 +1190,14 @@ function drawPlayer(player: RenderPlayer, isLocal: boolean) {
   context.fillRect(-19, -43, 38, 5);
   context.fillStyle = state.health > 35 ? "#76c893" : "#ed6a5a";
   context.fillRect(-18, -42, 36 * (state.health / WORLD.maxHealth), 3);
+  if (invulnerable && !state.dead) {
+    context.globalAlpha = 0.8;
+    context.strokeStyle = "#d5fbff";
+    context.lineWidth = 2;
+    context.beginPath();
+    context.arc(0, -5, 27 + Math.sin(performance.now() * 0.01) * 2, 0, Math.PI * 2);
+    context.stroke();
+  }
   context.restore();
   context.fillStyle = "#e9f2e7";
   context.font = "12px Arial, sans-serif";
@@ -1019,8 +1282,11 @@ function render(now: number) {
   for (const pickup of pickupVisuals.values()) drawPickup(pickup.item, pickup.x, pickup.y, pickup.angle);
   for (const [id, player] of players) drawPlayer(player, id === myId);
   drawLighting();
+  drawMuzzleFlashes();
   drawBullets();
+  drawCasings();
   drawImpactEffects();
+  drawDamageNumbers();
   context.restore();
   drawReticle();
   sendInput(now);
